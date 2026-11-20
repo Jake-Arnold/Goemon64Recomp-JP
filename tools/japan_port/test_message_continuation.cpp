@@ -20,6 +20,9 @@ std::atomic_bool exited{false};
 extern "C" {
 void entry(uint8_t* rdram, recomp_context* ctx);
 void other_entry(uint8_t* rdram, recomp_context* ctx);
+void idle_entry(uint8_t* rdram, recomp_context* ctx);
+goemon_jp_checkpoint_result goemon_jp_guest_checkpoint_probe_idle_entry(
+    uint8_t*, recomp_context*, const goemon_jp_guest_checkpoint*, goemon_jp_checkpoint_callback*, void*);
 goemon_jp_checkpoint_result goemon_jp_guest_checkpoint_probe_entry(
     uint8_t*, recomp_context*, const goemon_jp_guest_checkpoint*, goemon_jp_checkpoint_callback*, void*);
 goemon_jp_checkpoint_result goemon_jp_guest_checkpoint_probe_other_entry(
@@ -48,6 +51,7 @@ constexpr std::size_t ram_size = 0x1000;
 
 enum Entry : std::uint64_t {
     Driver, Receive, Restore, InspectSender, Jam, ProbeReceive, RestoreProbe, ProbeDriver, InspectProbeSender,
+    StartIdle, RestoreIdle, ConsumeExternal,
 };
 
 std::atomic_bool finished{false};
@@ -55,6 +59,7 @@ MessageContinuation waiting_call{};
 MessageContinuation completed_call{};
 goemon_jp_guest_checkpoint saved_probe{};
 goemon_jp_guest_checkpoint completed_probe{};
+goemon_jp_guest_checkpoint saved_idle{};
 alignas(OSThread) uint8_t saved_ram[ram_size]{};
 unsigned probe_receives = 0;
 unsigned probe_sends = 0;
@@ -243,23 +248,96 @@ void run_thread_function(uint8_t* rdram, std::uint64_t entry, std::uint64_t, std
             completed_probe = *checkpoint;
             break;
         }
+        case StartIdle: {
+            start_thread(rdram, original_thread, ConsumeExternal, 10);
+            recomp_context cpu{};
+            cpu.r2 = 0x1234;
+            cpu.r8 = static_cast<std::int64_t>(marker);
+            idle_entry(rdram, &cpu);
+            std::abort();
+        }
+        case RestoreIdle: {
+            auto blocked = GET_MEMBER(OSMesgQueue, queue, blocked_on_recv);
+            assert(ultramodern::thread_queue_pop(rdram, blocked) == original_thread);
+            start_thread(rdram, original_thread, ConsumeExternal, 10);
+            recomp_context cpu{};
+            auto invalid = saved_idle;
+            invalid.message = {};
+            assert(goemon_jp_guest_checkpoint_probe_idle_entry(rdram, &cpu, &invalid, nullptr, nullptr) ==
+                GOEMON_JP_CHECKPOINT_INVALID);
+            assert(cpu.r8 == 0);
+            (void)goemon_jp_guest_checkpoint_probe_idle_entry(rdram, &cpu, &saved_idle, nullptr, nullptr);
+            std::abort();
+        }
+        case ConsumeExternal:
+            assert(osRecvMesg(rdram, queue, received_message, OS_MESG_BLOCK) == 0);
+            assert(*TO_PTR(OSMesg, received_message) == 73);
+            wait_for_shutdown();
+            break;
     }
 }
 
-static void run_generation(uint8_t* rdram, Entry entry) {
+static void begin_generation(uint8_t* rdram, Entry entry) {
     finished.store(false);
     exited.store(false);
     ultramodern::init_thread_cleanup();
     start_thread(rdram, driver_thread, entry, 1);
+}
+
+static void wait_for_finished() {
     const auto deadline = std::chrono::steady_clock::now() + 5s;
     while (!finished.load() && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(1ms);
     }
     assert(finished.load());
+}
+
+static void end_generation() {
     ultramodern::request_guest_shutdown_for_future_reset();
     assert(ultramodern::wait_for_guest_joins_for_future_reset(2000));
     exited.store(true);
     ultramodern::join_thread_cleaner_thread();
+}
+
+static void run_generation(uint8_t* rdram, Entry entry) {
+    begin_generation(rdram, entry);
+    wait_for_finished();
+    end_generation();
+}
+
+static goemon_jp_guest_checkpoint wait_for_idle(uint8_t* rdram) {
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (const auto idle = ultramodern::jp_get_message_checkpoint(rdram, driver_thread)) {
+            assert(idle->message.call == GOEMON_JP_MESSAGE_IDLE_WAIT && idle->registers[2] == 0x1234);
+            return *idle;
+        }
+        std::this_thread::sleep_for(1ms);
+    }
+    std::abort();
+}
+
+static void test_idle_restore() {
+    assert(ultramodern::jp_rearm_guest_after_verified_exit());
+    alignas(OSThread) uint8_t idle_ram[ram_size]{};
+    osCreateMesgQueue(idle_ram, queue, messages, 2);
+    begin_generation(idle_ram, StartIdle);
+    saved_idle = wait_for_idle(idle_ram);
+    // The fixture has no native producers while copying RAM. Its other
+    // guest is blocked on the input queue and IDLE has no message to deliver.
+    alignas(OSThread) uint8_t idle_restore_ram[ram_size]{};
+    std::memcpy(idle_restore_ram, idle_ram, ram_size);
+    end_generation();
+    assert(ultramodern::jp_rearm_guest_after_verified_exit());
+
+    begin_generation(idle_restore_ram, RestoreIdle);
+    assert(wait_for_idle(idle_restore_ram).probe_revision == saved_idle.probe_revision);
+    ultramodern::enqueue_external_message(queue, 73, false, false);
+    wait_for_finished();
+    end_generation();
+    uint8_t* rdram = idle_restore_ram;
+    assert(*TO_PTR(int32_t, marker) == 1);
+    assert(TO_PTR(OSMesgQueue, queue)->validCount == 0);
 }
 
 int main() {
@@ -275,4 +353,5 @@ int main() {
         GOEMON_JP_CHECKPOINT_INVALID);
     assert(unbound_cpu.r4 == 0 && std::memcmp(restored_ram, saved_ram, ram_size) == 0);
     run_generation(restored_ram, ProbeDriver);
+    test_idle_restore();
 }

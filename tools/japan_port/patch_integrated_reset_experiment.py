@@ -68,7 +68,7 @@ bool ultramodern::jp_rearm_external_messages_after_verified_exit(
 MESSAGE_CONTINUATION_SCOPE = r"""using goemon_jp::savestate::MessageCall;
 using goemon_jp::savestate::MessageContinuation;
 
-// Publish only after the operation has reached a scheduler hand-off.
+// Publish at a runtime boundary that can be resumed from a saved record.
 class MessageContinuationScope {
     uint8_t* rdram;
 
@@ -94,6 +94,28 @@ static s32 finish_message_call(RDRAM_ARG bool success) {
 
 """
 
+IDLE_MESSAGE_LOOP = r"""
+[[noreturn]] void ultramodern::jp_idle_message_loop(uint8_t* rdram) {
+    for (;;) {
+        ultramodern::guest_shutdown_checkpoint();
+        QueuedMessage message;
+        {
+            std::unique_lock lock(idle_wakeup_mutex);
+            if (!external_messages.try_dequeue(message)) {
+                const MessageContinuationScope continuation(rdram, {MessageCall::IdleWait, 0, 0});
+                idle_wakeup.wait_for(lock, std::chrono::milliseconds{10});
+                continue;
+            }
+        }
+        if (!do_send(rdram, message.mq, message.mesg, message.jam, false) && message.requeue_if_blocked) {
+            external_messages.enqueue(message);
+        }
+        ultramodern::check_running_queue(rdram);
+    }
+}
+"""
+
+
 RESUME_MESSAGE_CALL = r"""
 bool ultramodern::jp_resume_message_call(
         uint8_t* rdram, const MessageContinuation& state, int32_t& result) {
@@ -103,6 +125,11 @@ bool ultramodern::jp_resume_message_call(
         return false;
     }
     switch (state.call) {
+        case MessageCall::IdleWait:
+            if (state.queue != 0 || state.argument != 0) {
+                return false;
+            }
+            jp_idle_message_loop(rdram);
         case MessageCall::Receive:
             result = finish_message_call(rdram, do_recv(rdram, state.queue, state.argument, true));
             return true;
@@ -131,12 +158,16 @@ def messages(src: str) -> str:
         '#include "ultramodern/ultramodern.hpp"\n'
         '#include "jp_generation_publisher_gate.hpp"\n'
         '#include "jp_message_continuation.hpp"\n'
+        '#include <condition_variable>\n'
+        '#include <mutex>\n'
         'namespace ultramodern { bool guest_shutdown_requested_for_future_reset(); }\n'
         '#include <cstdio>\n',
         "external message gate include")
     src = once(src,
         "static moodycamel::BlockingConcurrentQueue<QueuedMessage> external_messages {};\n",
         "static moodycamel::BlockingConcurrentQueue<QueuedMessage> external_messages {};\n"
+        "static std::mutex idle_wakeup_mutex;\n"
+        "static std::condition_variable idle_wakeup;\n"
         "namespace ultramodern { bool jp_flush_external_messages_after_join(std::uint64_t); }\n"
         "namespace ultramodern { bool jp_rearm_external_messages_after_verified_exit(std::uint64_t); }\n"
         + EXTERNAL_QUEUE_FENCE,
@@ -172,7 +203,15 @@ def messages(src: str) -> str:
         if src.count(ending) != count:
             raise ValueError(f"Unexpected return sites for {result_name} message operations")
         src = src.replace(ending, f"    return finish_message_call(PASS_RDRAM {result_name});\n")
-    src += RESUME_MESSAGE_CALL
+    src = once(src,
+        "    external_messages.enqueue({mq, msg, jam, requeue_if_blocked});\n",
+        "    {\n"
+        "        std::lock_guard lock(idle_wakeup_mutex);\n"
+        "        if (!external_messages.enqueue({mq, msg, jam, requeue_if_blocked})) return;\n"
+        "    }\n"
+        "    idle_wakeup.notify_one();\n",
+        "wake IDLE for a published external message without removing it")
+    src += IDLE_MESSAGE_LOOP + RESUME_MESSAGE_CALL
     return "// Experimental reset external message queue generation fence.\n" + src
 
 

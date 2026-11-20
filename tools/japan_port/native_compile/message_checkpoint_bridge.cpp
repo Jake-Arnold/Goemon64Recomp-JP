@@ -26,6 +26,11 @@ void goemon_jp_probe_message_call(uint8_t* rdram, recomp_context* ctx,
     call(rdram, ctx);
 }
 
+void goemon_jp_probe_idle_wait(uint8_t* rdram, const goemon_jp_guest_checkpoint* checkpoint) {
+    const MessageCpuScope scope(rdram, checkpoint);
+    ultramodern::jp_idle_message_loop(rdram);
+}
+
 bool goemon_jp_probe_resume_message_call(
         uint8_t* rdram, goemon_jp_guest_checkpoint* checkpoint) {
     using goemon_jp::savestate::MessageCall;

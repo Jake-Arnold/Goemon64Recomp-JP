@@ -40,9 +40,11 @@ Use `GOEMON_JP_CHECKPOINT_PROBE_CALLEES` to name additional directly called func
 
 Set `GOEMON_JP_CHECKPOINT_PROBE_MESSAGES=ON` to instrument direct calls to the integrated runtime's send, jam, and receive functions. Once a caller is parked, the runtime can copy its saved CPU frames together with the pending queue operation or the result of an operation that already completed. After the restored scheduler selects the thread, the probe finishes the operation if necessary, restores the return register, and resumes through the saved callers.
 
-For the live Japanese preview, configure the archive with `GOEMON_JP_LIVE_THREAD_CHECKPOINTS=ON`. This instruments MAIN, GAME, SCHED, and AUDIO in the pinned generated code. F5 reports live thread coverage and F7 reports restore availability for the selected slot. The individual probe options above can be used in a separate build directory.
+For the live Japanese preview, configure the archive with `GOEMON_JP_LIVE_THREAD_CHECKPOINTS=ON`. This instruments MAIN, GAME, SCHED, AUDIO, and IDLE in the pinned generated code. F5 reports live thread coverage and F7 reports restore availability for the selected slot. The individual probe options above can be used in a separate build directory.
 
-The scheduler fixture exercises this with copied guest RAM and a fresh native thread generation. A game-wide save state still needs a coordinator for all guest threads and native workers, plus checkpoint coverage for other native waits.
+IDLE publishes its checkpoint while waiting for an external message. It clears that record before dequeuing or delivering a message. A restored IDLE thread resumes the wait loop after setup. The scheduler fixture restores IDLE from copied RAM and verifies that a native producer can wake it and deliver a message to a blocked guest.
+
+A game-wide save state still needs a coordinator for all guest threads and native workers, serialization of pending external messages, and coverage for other native waits.
 
 ## Verified local build, 15 November 2026
 

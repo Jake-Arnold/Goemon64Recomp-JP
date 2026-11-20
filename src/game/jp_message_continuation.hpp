@@ -12,6 +12,7 @@ enum class MessageCall : std::uint8_t {
     Jam = GOEMON_JP_MESSAGE_JAM,
     Receive = GOEMON_JP_MESSAGE_RECEIVE,
     Return = GOEMON_JP_MESSAGE_RETURN,
+    IdleWait = GOEMON_JP_MESSAGE_IDLE_WAIT,
 };
 
 // Queue and output addresses use guest virtual addresses. For a send or jam,
@@ -25,6 +26,8 @@ struct MessageContinuation {
 } // namespace goemon_jp::savestate
 
 namespace ultramodern {
+
+[[noreturn]] void jp_idle_message_loop(std::uint8_t* rdram);
 
 void jp_set_message_continuation(
     std::uint8_t* rdram, std::optional<goemon_jp::savestate::MessageContinuation> continuation);

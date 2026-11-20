@@ -179,12 +179,12 @@ static void preview_save_state_action(bool save) {
     if (save) {
         const auto coverage = ultramodern::jp_guest_checkpoint_coverage();
         const auto ready = coverage.not_started + coverage.message_checkpoints;
-        if (ready < coverage.threads) {
-            status += " (" + std::to_string(ready) + "/" + std::to_string(coverage.threads) +
-                " guest threads covered)";
-        } else {
-            status += " (runtime snapshot incomplete)";
+        status += " (" + std::to_string(ready) + "/" + std::to_string(coverage.threads) +
+            " guest threads covered";
+        if (ready == coverage.threads) {
+            status += ", runtime snapshot incomplete";
         }
+        status += ")";
         std::fprintf(stderr, "[Native save-state preview] slot=%d %s; waiting=%u unstarted=%u\n",
                      recomp::get_save_slot(), status.c_str(), coverage.message_checkpoints, coverage.not_started);
     } else {

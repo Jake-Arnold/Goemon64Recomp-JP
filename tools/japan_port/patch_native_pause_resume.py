@@ -174,6 +174,16 @@ def messages(src: str) -> str:
         '        ultramodern::guest_shutdown_checkpoint();\n'
         '        (void)goemon_jp::pause::controller().wait_if_paused(exited);\n',
         "timed message wake checkpoint")
+    src = once(src,
+        '[[noreturn]] void ultramodern::jp_idle_message_loop(uint8_t* rdram) {\n'
+        '    for (;;) {\n',
+        '[[noreturn]] void ultramodern::jp_idle_message_loop(uint8_t* rdram) {\n'
+        '    for (;;) {\n'
+        '        {\n'
+        '            const MessageContinuationScope continuation(rdram, {MessageCall::IdleWait, 0, 0});\n'
+        '            (void)goemon_jp::pause::controller().wait_if_paused(exited);\n'
+        '        }\n',
+        "pause IDLE at the boundary before it consumes a message")
     return "// JP F6 cooperative pause: external message delivery to guest memory.\n" + src
 
 

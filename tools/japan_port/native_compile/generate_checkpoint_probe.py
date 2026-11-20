@@ -18,6 +18,7 @@ MESSAGE_CALLS = {
     "osSendMesg_recomp": "GOEMON_JP_MESSAGE_SEND",
     "osJamMesg_recomp": "GOEMON_JP_MESSAGE_JAM",
     "osRecvMesg_recomp": "GOEMON_JP_MESSAGE_RECEIVE",
+    "pause_self": "GOEMON_JP_MESSAGE_IDLE_WAIT",
 }
 PROBE_HEADER = '''#include "guest_checkpoint_probe.h"
 #include "funcs.h"
@@ -89,7 +90,7 @@ def emit_function(name: str, body: list[str], functions: dict[str, int],
             continue
         if EXTRA_LOCAL.match(statement) or statement.startswith("#"):
             raise ValueError(f"{name}: unsupported additional locals or preprocessor statements")
-        if not CALL.fullmatch(statement):
+        if not CALL.fullmatch(statement) and not (message_continuations and statement == "pause_self(rdram);"):
             emitted.append(line)
             continue
 
@@ -108,6 +109,11 @@ def emit_function(name: str, body: list[str], functions: dict[str, int],
                 f"        goemon_jp_checkpoint_result child = probe_{callee}(rdram, ctx, execution, NULL);",
                 "        if (child != GOEMON_JP_CHECKPOINT_FINISHED) return child;",
                 "    }",
+            ))
+        elif callee == "pause_self":
+            emitted.extend((
+                "    capture_cpu(&execution->state, ctx);",
+                "    goemon_jp_probe_idle_wait(rdram, &execution->state);",
             ))
         elif message:
             emitted.extend((
@@ -163,7 +169,7 @@ def generate(bodies: dict[str, list[str]], *, message_continuations: bool = Fals
     functions = {name: index for index, name in enumerate(bodies)}
     if entry_points is None:
         entry_points = {"goemon_jp_guest_checkpoint_probe": next(iter(bodies))}
-    revision_input = f"goemon-jp-checkpoint-v4:{message_continuations}\n" + "\n".join(
+    revision_input = f"goemon-jp-checkpoint-v5:{message_continuations}\n" + "\n".join(
         name + "\n" + "\n".join(body) for name, body in bodies.items()
     )
     revision = hashlib.sha256(revision_input.encode()).hexdigest()[:16]
@@ -182,9 +188,12 @@ def generate(bodies: dict[str, list[str]], *, message_continuations: bool = Fals
     table_text = "\n".join(site_tables)
     entry_text = "\n".join(entries)
     validate_message = """
+    const goemon_jp_guest_frame* leaf = &state->frames[state->frame_count - 1];
+    const uint8_t expected = functions[leaf->function_index].sites[leaf->call_site - 1].message;
+    if (expected == GOEMON_JP_MESSAGE_IDLE_WAIT) {
+        return state->message.call == expected && state->message.queue == 0 && state->message.argument == 0;
+    }
     if (state->message.call != GOEMON_JP_MESSAGE_NONE) {
-        const goemon_jp_guest_frame* leaf = &state->frames[state->frame_count - 1];
-        const uint8_t expected = functions[leaf->function_index].sites[leaf->call_site - 1].message;
         if (expected == GOEMON_JP_MESSAGE_NONE) {
             return false;
         }

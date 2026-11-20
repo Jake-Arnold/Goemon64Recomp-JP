@@ -26,6 +26,7 @@ goemon_jp_checkpoint_result goemon_jp_guest_checkpoint_probe(
 // Used by probes generated with --message-continuations.
 void goemon_jp_probe_message_call(uint8_t* rdram, recomp_context* ctx,
     const goemon_jp_guest_checkpoint* checkpoint, recomp_func_t* call);
+void goemon_jp_probe_idle_wait(uint8_t* rdram, const goemon_jp_guest_checkpoint* checkpoint);
 bool goemon_jp_probe_resume_message_call(uint8_t* rdram, goemon_jp_guest_checkpoint* checkpoint);
 
 #ifdef __cplusplus
