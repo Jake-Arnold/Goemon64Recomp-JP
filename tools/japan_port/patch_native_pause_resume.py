@@ -150,6 +150,20 @@ def timer(src: str) -> str:
 
 
 VIDEO_SNAPSHOT = r"""
+// Published by the graphics owner before it can acknowledge a pause.
+// Readers hold the pause lock, which also keeps the graphics owner parked.
+static ultramodern::renderer::RendererContext* parked_renderer = nullptr;
+
+std::optional<goemon_jp::savestate::RendererScanout> ultramodern::jp_snapshot_renderer_scanout() {
+    std::optional<goemon_jp::savestate::RendererScanout> result;
+    (void)goemon_jp::pause::controller().inspect_parked(goemon_jp::pause::PauseWorker::Graphics, [&] {
+        if (parked_renderer && jp_event_gfx_tasks_pending.load(std::memory_order_acquire) == 0) {
+            result = recomp::jp_capture_renderer_scanout(*parked_renderer);
+        }
+    });
+    return result;
+}
+
 std::optional<goemon_jp::savestate::VideoCheckpoint> ultramodern::jp_snapshot_video() {
     using goemon_jp::pause::PauseWorker;
     using namespace goemon_jp::savestate;
@@ -216,6 +230,7 @@ def events(src: str) -> str:
     src = once(src,
         '    while (!exited) {\n'
         '        // Try to pull an action from the queue\n',
+        '    parked_renderer = renderer_context.get();\n'
         '    while (!exited) {\n'
         '        if (!goemon_jp::pause::controller().wait_if_paused(exited, goemon_jp::pause::PauseWorker::Graphics)) break;\n'
         '        // Try to pull an action from the queue\n',
@@ -224,6 +239,11 @@ def events(src: str) -> str:
         "uint64_t total_vis = 0;\n",
         "uint64_t total_vis = 0;\n" + VIDEO_SNAPSHOT,
         "copy the paused VI and presented frame registers together")
+    src = once(src,
+        "    graphics_shutdown_ready.wait();\n",
+        "    parked_renderer = nullptr;\n"
+        "    graphics_shutdown_ready.wait();\n",
+        "retire the capture handle before destroying RT64")
     return "// JP F6 cooperative pause: preserve last VI/frame/RSP and renderer.\n" + src
 
 

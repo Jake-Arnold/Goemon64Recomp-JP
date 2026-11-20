@@ -214,6 +214,12 @@ static void preview_save_state_action(bool save) {
         } else {
             std::fprintf(stderr, "[Native save-state preview] video_snapshot=unavailable\n");
         }
+        if (const auto scanout = ultramodern::jp_snapshot_renderer_scanout()) {
+            std::fprintf(stderr, "[Native save-state preview] renderer_scanout=ready address=%08x size=%ux%u bytes=%zu\n",
+                         scanout->address, scanout->width, scanout->height, scanout->pixels.size());
+        } else {
+            std::fprintf(stderr, "[Native save-state preview] renderer_scanout=unavailable\n");
+        }
         if (const auto audio = ultramodern::jp_snapshot_audio()) {
             std::fprintf(stderr, "[Native save-state preview] audio_snapshot=ready rate=%u buffered_samples=%zu\n",
                          audio->sample_rate, audio->pending_output.size());

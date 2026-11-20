@@ -8,6 +8,10 @@
 #include "ultramodern/renderer_context.hpp"
 #include "librecomp/mods.hpp"
 
+#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+#include "../src/game/jp_renderer_scanout.hpp"
+#endif
+
 namespace RT64 {
     struct Application;
 }
@@ -31,6 +35,10 @@ namespace goemon64 {
             void shutdown() override;
             uint32_t get_display_framerate() const override;
             float get_resolution_scale() const override;
+
+#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+            std::optional<goemon_jp::savestate::RendererScanout> snapshot_scanout();
+#endif
 
         private:
             std::unique_ptr<RT64::Application> app;

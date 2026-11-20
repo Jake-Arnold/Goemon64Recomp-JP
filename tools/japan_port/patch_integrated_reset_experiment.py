@@ -745,7 +745,8 @@ VIDEO_RESTORE = r"""
 static uint8_t* video_restore_rdram = nullptr;
 
 bool ultramodern::jp_prepare_video_restore(const goemon_jp::savestate::VideoCheckpoint& saved,
-        uint64_t generation, std::span<uint8_t> restored_ram) {
+        uint64_t generation, std::span<uint8_t> restored_ram,
+        const goemon_jp::savestate::RendererScanout* scanout) {
     using goemon_jp::savestate::VideoModeSource;
     const auto publisher = jp_config_publisher_gate.snapshot();
     if (!publisher.open || publisher.generation != generation || publisher.in_flight != 0 ||
@@ -802,6 +803,9 @@ bool ultramodern::jp_prepare_video_restore(const goemon_jp::savestate::VideoChec
         return false;
     }
 
+    if (scanout && !goemon_jp::savestate::restore_renderer_scanout(*scanout, restored_ram)) {
+        return false;
+    }
     std::lock_guard lock(events_context.message_mutex);
     events_context.vi.states[0] = buffers[0];
     events_context.vi.states[1] = buffers[1];
@@ -809,7 +813,7 @@ bool ultramodern::jp_prepare_video_restore(const goemon_jp::savestate::VideoChec
     events_context.vi.field = saved.field;
     events_context.vi.remaining_retraces = saved.remaining_retraces;
     events_context.vi.regs = saved.registers;
-    events_context.vi.update_screen_regs = saved.presented_registers;
+    events_context.vi.update_screen_regs = scanout ? scanout->vi : saved.presented_registers;
     events_context.sp.mq = saved.sp.queue;
     events_context.sp.msg = saved.sp.message;
     events_context.dp = {saved.dp.queue, saved.dp.message};

@@ -119,6 +119,17 @@ extern "C" uint32_t osVirtualToPhysical(int32_t address) {
     return static_cast<uint32_t>(address) & 0x1FFFFFFF;
 }
 
+std::optional<goemon_jp::savestate::RendererScanout> recomp::jp_capture_renderer_scanout(
+        ultramodern::renderer::RendererContext&) {
+    auto vi = *ultramodern::renderer::get_vi_regs();
+    vi.VI_ORIGIN_REG += 0x100; // Early presentation is separate from the VI cursor.
+    constexpr uint32_t pixel_bytes = 2;
+    const auto row = vi.VI_WIDTH_REG * pixel_bytes;
+    return goemon_jp::savestate::RendererScanout{
+        vi, vi.VI_ORIGIN_REG - row, vi.VI_WIDTH_REG, 1, pixel_bytes,
+        std::vector<uint8_t>(row, 0xAB)};
+}
+
 void test_video_checkpoint() {
     using goemon_jp::savestate::VideoModeSource;
     constexpr int32_t mode_address = static_cast<int32_t>(0x80000100u);
@@ -135,6 +146,7 @@ void test_video_checkpoint() {
     assert(!ultramodern::jp_snapshot_video());
     OSViMode mode{};
     mode.comRegs.width = 320;
+    mode.comRegs.ctrl = 2;
     mode.fldRegs[0].origin = 0x10;
     mode.fldRegs[1].origin = 0x10;
     std::memcpy(original + 0x100, &mode, sizeof(mode));
@@ -153,6 +165,8 @@ void test_video_checkpoint() {
     assert(checkpoint.buffers[checkpoint.current_buffer].mode_source == VideoModeSource::Guest);
     assert(checkpoint.buffers[checkpoint.current_buffer].mode_address == mode_address);
     assert(checkpoint.presented_registers.VI_ORIGIN_REG == 0x410);
+    const auto scanout = ultramodern::jp_snapshot_renderer_scanout();
+    assert(scanout && scanout->pixels.size() == 640);
     assert(checkpoint.sp.queue == queue_address && checkpoint.sp.message == 58);
     assert(checkpoint.ai.queue == queue_address && checkpoint.ai.message == 59);
     assert(!ultramodern::jp_prepare_video_restore(checkpoint, 1, restored));
@@ -164,7 +178,12 @@ void test_video_checkpoint() {
     auto invalid = checkpoint;
     invalid.buffers[0].mode_address = static_cast<int32_t>(0x80001000u);
     assert(!ultramodern::jp_prepare_video_restore(invalid, 2, restored));
-    assert(ultramodern::jp_prepare_video_restore(checkpoint, 2, restored));
+    auto wrong_scanout = *scanout;
+    ++wrong_scanout.address;
+    assert(!ultramodern::jp_prepare_video_restore(checkpoint, 2, restored, &wrong_scanout));
+    assert(std::memcmp(restored, original, sizeof(restored)) == 0);
+    assert(ultramodern::jp_prepare_video_restore(checkpoint, 2, restored, &*scanout));
+    assert(std::memcmp(restored + scanout->address, scanout->pixels.data(), scanout->pixels.size()) == 0);
     assert(!ultramodern::jp_prepare_video_restore(checkpoint, 2, restored));
 
     // Make stale pointers observable, and verify the mode takes effect
@@ -177,7 +196,8 @@ void test_video_checkpoint() {
     exited.store(false);
     ultramodern::init_events(restored, nullptr);
     wait_for([] { return frame_count.load() == 1; });
-    assert(first_origin.load() == checkpoint.presented_registers.VI_ORIGIN_REG);
+    assert(first_origin.load() == scanout->vi.VI_ORIGIN_REG);
+    assert(first_origin.load() != checkpoint.presented_registers.VI_ORIGIN_REG);
     assert(osViGetCurrentFramebuffer() == framebuffer && osViGetNextFramebuffer() == next_buffer);
     auto cold = capture_video();
     assert(cold.remaining_retraces == checkpoint.remaining_retraces);

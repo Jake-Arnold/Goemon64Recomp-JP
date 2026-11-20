@@ -15,6 +15,10 @@
 #include "recomp_ui.h"
 #include "concurrentqueue.h"
 
+#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+#include "jp_rt64_scanout.hpp"
+#endif
+
 static RT64::UserConfiguration::Antialiasing device_max_msaa = RT64::UserConfiguration::Antialiasing::None;
 static bool sample_positions_supported = false;
 static bool high_precision_fb_enabled = false;
@@ -340,6 +344,23 @@ void goemon64::renderer::RT64Context::shutdown() {
         app->end();
     }
 }
+
+#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+std::optional<goemon_jp::savestate::RendererScanout> goemon64::renderer::RT64Context::snapshot_scanout() {
+    if (app == nullptr) {
+        return std::nullopt;
+    }
+    return goemon_jp::savestate::capture_rt64_scanout(*app);
+}
+
+std::optional<goemon_jp::savestate::RendererScanout> recomp::jp_capture_renderer_scanout(
+        ultramodern::renderer::RendererContext& renderer) {
+    if (auto* rt64 = dynamic_cast<goemon64::renderer::RT64Context*>(&renderer)) {
+        return rt64->snapshot_scanout();
+    }
+    return std::nullopt;
+}
+#endif
 
 bool goemon64::renderer::RT64Context::update_config(const ultramodern::renderer::GraphicsConfig& old_config, const ultramodern::renderer::GraphicsConfig& new_config) {
     if (old_config == new_config) {

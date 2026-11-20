@@ -5,7 +5,7 @@
 #include <optional>
 #include <span>
 
-#include "ultramodern/renderer_context.hpp"
+#include "jp_renderer_scanout.hpp"
 
 namespace goemon_jp::savestate {
 
@@ -50,6 +50,7 @@ std::optional<goemon_jp::savestate::VideoCheckpoint> jp_snapshot_video();
 
 // Rearm the event generation first, then stage registers against restored RAM.
 bool jp_prepare_video_restore(const goemon_jp::savestate::VideoCheckpoint& state,
-    std::uint64_t generation, std::span<std::uint8_t> restored_ram);
+    std::uint64_t generation, std::span<std::uint8_t> restored_ram,
+    const goemon_jp::savestate::RendererScanout* scanout = nullptr);
 
 } // namespace ultramodern
