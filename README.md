@@ -1,7 +1,13 @@
 # Goemon 64: Recompiled
 Goemon 64: Recompiled is a project that uses [N64: Recompiled](https://github.com/Mr-Wiseguy/N64Recomp) to **statically recompile** "Mystical Ninja Starring Goemon" (and soon "Goemon's Great Adventure") into a native port with many new features and enhancements. This project uses [RT64](https://github.com/rt64/rt64) as the rendering engine to provide graphical enhancements.
 
-### [Check out the latest release here](https://github.com/klorfmorf/Goemon64Recomp/releases/latest).
+## Japanese native development
+
+This standalone repository continues the Japanese native port from [Jake-Arnold/Goemon64Recomp](https://github.com/Jake-Arnold/Goemon64Recomp), based on [klorfmorf/Goemon64Recomp](https://github.com/klorfmorf/Goemon64Recomp). Its default branch includes the Japanese rendering and crash fixes and the optional F6 pause and F8 reset runtime. See the [Japanese build notes](docs/JAPAN_PORT.md) and the [original pull request archive](docs/ORIGINAL_PR_ARCHIVE.md).
+
+The [GNU GPL v3 license](COPYING) and original project history are included. Build and run the Japanese port with your own Japanese game ROM.
+
+### [Original project releases](https://github.com/klorfmorf/Goemon64Recomp/releases/latest)
 
 ### **This repository and its releases do not contain game assets. The original game is required to build or run this project.**
 
