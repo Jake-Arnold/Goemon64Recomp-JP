@@ -98,8 +98,7 @@ class ExitStage9(unittest.TestCase):
     def test_version_jp_only(self):
         main = (ROOT / "src/main/main.cpp").read_text()
         ui = (ROOT / "src/ui/ui_launcher.cpp").read_text()
-        self.assertIn('version_string = "0.2.25-dev"', main)
-        self.assertIn('version_string = "0.2.3-dev"', main)
+        self.assertIn('version_string = GOEMON_LAUNCHER_VERSION', main)
         self.assertIn('jp_exit_build_mode = " [guest-exit-drain]"', main)
         self.assertIn('version_string += " [guest-exit-drain]"', ui)
 

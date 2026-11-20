@@ -39,6 +39,7 @@
 #endif
 
 #include "recomp_ui.h"
+#include "goemon_launcher.h"
 #include "recomp_input.h"
 #include "goemon_config.h"
 #include "goemon_sound.h"
@@ -48,6 +49,7 @@
 #include "recomp_data.h"
 #include "ovl_patches.hpp"
 #include "librecomp/game.hpp"
+#include "librecomp/mods.hpp"
 #include "librecomp/mods.hpp"
 #include "librecomp/helpers.hpp"
 
@@ -67,8 +69,8 @@
 
 #include "../../lib/rt64/src/contrib/stb/stb_image.h"
 
+const std::string version_string = GOEMON_LAUNCHER_VERSION;
 #ifdef GOEMON_JAPAN_NATIVE
-const std::string version_string = "0.2.25-dev";
 #ifdef GOEMON_JP_TIMER_STAGE1_ACTIVE
 constexpr const char* jp_timer_build_mode = " [timer-stage1]";
 #else
@@ -159,8 +161,6 @@ constexpr const char* jp_timer_epoch_build_mode = " [timer-epoch-clock]";
 #else
 constexpr const char* jp_timer_epoch_build_mode = " [timer-epoch-off]";
 #endif
-#else
-const std::string version_string = "0.2.3-dev";
 #endif
 
 template<typename... Ts>
@@ -271,7 +271,9 @@ ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callbacks_t::
 #else
     const std::string window_title = "Goemon 64: Recompiled";
 #endif
-    window = SDL_CreateWindow(window_title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1600, 960, flags);
+    const auto& rom_title = goemon64::launcher::experimental_window_title();
+    const auto& title = rom_title.empty() ? window_title : rom_title;
+    window = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1600, 960, flags);
 #if defined(__linux__)
     SetImageAsIcon("icons/512.png",window);
     if (ultramodern::renderer::get_graphics_config().wm_option == ultramodern::renderer::WindowMode::Fullscreen) { // TODO: Remove once RT64 gets native fullscreen support on Linux
@@ -302,6 +304,10 @@ ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callbacks_t::
 }
 
 void update_gfx(void*) {
+    const auto title = goemon64::launcher::take_window_title();
+    if (window && !title.empty()) {
+        SDL_SetWindowTitle(window, title.c_str());
+    }
     recomp::handle_events();
 }
 
@@ -552,6 +558,9 @@ RspUcodeFunc* get_rsp_microcode(const OSTask* task) {
 
 extern "C" void recomp_entrypoint(uint8_t * rdram, recomp_context * ctx);
 gpr get_entrypoint_address();
+#ifdef GOEMON_UNIFIED_REGIONS
+extern "C" void goemon_usa_recomp_entrypoint(uint8_t* rdram, recomp_context* ctx);
+#endif
 
 // Each executable owns one region-specific GameEntry. Never dispatch JP code
 // through USA overlay tables, patch definitions or save configuration.
@@ -569,6 +578,20 @@ std::vector<recomp::GameEntry> supported_games = {
         .entrypoint_address = get_entrypoint_address(),
         .entrypoint = recomp_entrypoint,
     }
+#ifdef GOEMON_UNIFIED_REGIONS
+    ,{
+        .rom_hash = 0xDB1BC7EE0E6BEBA1ULL,
+        .internal_name = "MYSTICAL NINJA",
+        .game_id = u8"mnsg.us",
+        .mod_game_id = "mnsg",
+        .save_type = recomp::SaveType::AllowAll,
+        .is_enabled = true,
+        .decompression_routine = goemon64::decompress_mnsg,
+        .has_compressed_code = true,
+        .entrypoint_address = get_entrypoint_address(),
+        .entrypoint = goemon_usa_recomp_entrypoint,
+    }
+#endif
 };
 #else
 // array of supported GameEntry objects
@@ -587,6 +610,47 @@ std::vector<recomp::GameEntry> supported_games = {
 	}
 };
 #endif // GOEMON_JAPAN_NATIVE
+
+
+#ifdef GOEMON_UNIFIED_REGIONS
+bool goemon64::launcher::start_unified_game(bool japan) {
+    if (ultramodern::is_game_started()) {
+        return false;
+    }
+    auto& game = supported_games[japan ? 0 : 1];
+    auto rom_hash = game.rom_hash;
+    if (experimental_rom_mode()) {
+        if (!activate_experimental_rom(japan, rom_hash)) {
+            return false;
+        }
+    } else if (!region_rom_valid(japan) || !select_unified_profile(japan)) {
+        return false;
+    }
+    const auto profile = goemon64::get_app_folder_path();
+    if (profile.empty()) {
+        return false;
+    }
+
+    // No guest has started yet. Install one matching code/patch table before
+    // publishing the game ID that lets the waiting guest boot.
+    if (japan) {
+        goemon64::register_overlays();
+        goemon64::register_patches();
+    } else {
+        goemon64::register_usa_overlays();
+        goemon64::register_usa_patches();
+    }
+    game.rom_hash = rom_hash;
+    recomp::register_game(game);
+    recomp::mods::close_mods();
+    recomp::register_config_path(profile);
+    recomp::mods::initialize_mods();
+    recomp::mods::scan_mods();
+    queue_window_title(japan);
+    recomp::start_game(game.game_id);
+    return true;
+}
+#endif
 
 // TODO: move somewhere else
 namespace goemon64 {
@@ -878,6 +942,23 @@ int main(int argc, char** argv) {
         fprintf(stderr, "Failed to load controller mappings: %s\n", SDL_GetError());
     }
 
+    if (argc == 2) {
+#ifndef GOEMON_UNIFIED_REGIONS
+        if (goemon64::launcher::experimental_rom_mode() &&
+            goemon64::launcher::action_from_argument(argv[1]) == goemon64::launcher::Action::Play) {
+#ifdef GOEMON_JAPAN_NATIVE
+            constexpr bool native_is_japan = true;
+#else
+            constexpr bool native_is_japan = false;
+#endif
+            if (!goemon64::launcher::activate_experimental_rom(native_is_japan, supported_games[0].rom_hash)) {
+                goemon64::show_error_message_box("Could not start ROM", "Import an experimental ROM first.");
+                return EXIT_FAILURE;
+            }
+        }
+#endif
+        recompui::set_launcher_action(argv[1]);
+    }
     recomp::register_config_path(goemon64::get_app_folder_path());
 
     // Register supported games and patches
@@ -903,8 +984,10 @@ int main(int argc, char** argv) {
     recompui::register_ui_exports();
     recomputil::register_data_api_exports();
 
+#ifndef GOEMON_UNIFIED_REGIONS
     goemon64::register_overlays();
     goemon64::register_patches();
+#endif
     recomputil::init_extended_actor_data();
     goemon64::load_config();
 
@@ -1021,5 +1104,12 @@ int main(int argc, char** argv) {
     timeEndPeriod(1);
 #endif
 
+#if defined(__linux__) && defined(GOEMON_JAPAN_NATIVE)
+    goemon_jp::logging::finish_session();
+#endif
+    if (!goemon64::launcher::launch_requested_region()) {
+        goemon64::show_error_message_box("Launch failed", "Could not start the other regional build.");
+        return EXIT_FAILURE;
+    }
     return EXIT_SUCCESS;
 }

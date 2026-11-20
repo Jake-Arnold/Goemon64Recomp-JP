@@ -475,7 +475,7 @@ const recomp::DefaultN64Mappings recomp::default_n64_keyboard_mappings = {
     .apply_menu = {
         {.input_type = (uint32_t)InputType::Keyboard, .input_id = SDL_SCANCODE_F}
     },
-#ifdef GOEMON_JAPAN_NATIVE
+#if defined(GOEMON_JAPAN_NATIVE) || defined(GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE)
     .reset_game = {
         {.input_type = (uint32_t)InputType::Keyboard, .input_id = SDL_SCANCODE_F8}
     },
@@ -551,7 +551,7 @@ const recomp::DefaultN64Mappings recomp::default_n64_controller_mappings = {
         {.input_type = (uint32_t)InputType::ControllerDigital, .input_id = SDL_CONTROLLER_BUTTON_WEST},
         {.input_type = (uint32_t)InputType::ControllerDigital, .input_id = SDL_CONTROLLER_BUTTON_START}
     },
-#ifdef GOEMON_JAPAN_NATIVE
+#if defined(GOEMON_JAPAN_NATIVE) || defined(GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE)
     .reset_game = {},
 #endif
 };
@@ -603,7 +603,7 @@ void recomp::poll_inputs() {
     #endif
 
 
-#if defined(GOEMON_JAPAN_NATIVE)
+#if defined(GOEMON_JAPAN_NATIVE) || defined(GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE)
     // Input plumbing only: the pinned runtime cannot safely reboot its
     // guest OSThreads and RDRAM yet. Do not exit or restart the process.
     // Track button state while capturing input so a stale press cannot

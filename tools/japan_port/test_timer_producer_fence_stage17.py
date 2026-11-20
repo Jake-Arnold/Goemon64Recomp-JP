@@ -105,8 +105,7 @@ class Stage17TimerProducerFence(unittest.TestCase):
     def test_generated_versions_and_usa_isolation(self):
         main = (ROOT / "src/main/main.cpp").read_text()
         ui = (ROOT / "src/ui/ui_launcher.cpp").read_text()
-        self.assertIn('version_string = "0.2.25-dev"', main)
-        self.assertIn('version_string = "0.2.3-dev"', main)
+        self.assertIn('version_string = GOEMON_LAUNCHER_VERSION', main)
         self.assertIn('jp_timer_producer_build_mode = " [timer-publisher-fence]"', main)
         self.assertIn('version_string += " [timer-publisher-fence]"', ui)
 

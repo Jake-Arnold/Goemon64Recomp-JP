@@ -619,6 +619,14 @@ public:
             }
         );
         bind_option(constructor, "wm_option", &new_options.wm_option);
+        constructor.BindFunc("show_fps",
+            [](Rml::Variant& out) { out = goemon64::get_show_fps(); },
+            [](const Rml::Variant& in) { goemon64::set_show_fps(in.Get<bool>()); });
+        constructor.BindFunc("fps_corner",
+            [](Rml::Variant& out) { out = static_cast<int>(goemon64::get_fps_corner()); },
+            [](const Rml::Variant& in) {
+                goemon64::set_fps_corner(static_cast<goemon64::FpsCorner>(in.Get<int>()));
+            });
         bind_option(constructor, "ar_option", &new_options.ar_option);
         bind_option(constructor, "hr_option", &new_options.hr_option);
         bind_option(constructor, "msaa_option", &new_options.msaa_option);

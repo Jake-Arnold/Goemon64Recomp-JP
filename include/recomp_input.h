@@ -39,7 +39,7 @@ namespace recomp {
         DEFINE_INPUT(X_AXIS_NEG, 0, "Left", "Used to move and for steering while swimming. Used to control the cursor in the cockpit while controlling Impact.") \
         DEFINE_INPUT(X_AXIS_POS, 0, "Right", "Used to move and for steering while swimming. Used to control the cursor in the cockpit while controlling Impact.") \
 
-#ifdef GOEMON_JAPAN_NATIVE
+#if defined(GOEMON_JAPAN_NATIVE) || defined(GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE)
     #define DEFINE_JP_RESET_INPUT() \
         DEFINE_INPUT(RESET_GAME, 0, "Reset Game", "Request an N64 reset; backend not yet enabled in this build.")
 #else
@@ -126,7 +126,7 @@ namespace recomp {
         std::vector<InputField> toggle_menu;
         std::vector<InputField> accept_menu;
         std::vector<InputField> apply_menu;
-#ifdef GOEMON_JAPAN_NATIVE
+#if defined(GOEMON_JAPAN_NATIVE) || defined(GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE)
         std::vector<InputField> reset_game;
 #endif
     };
@@ -155,7 +155,7 @@ namespace recomp {
             case GameInput::TOGGLE_MENU: return defaults.toggle_menu;
             case GameInput::ACCEPT_MENU: return defaults.accept_menu;
             case GameInput::APPLY_MENU: return defaults.apply_menu;
-#ifdef GOEMON_JAPAN_NATIVE
+#if defined(GOEMON_JAPAN_NATIVE) || defined(GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE)
             case GameInput::RESET_GAME: return defaults.reset_game;
 #endif
             default: return empty_input_field;

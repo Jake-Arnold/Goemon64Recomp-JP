@@ -76,8 +76,7 @@ class NativeTimerLifecycleTests(unittest.TestCase):
 
     def test_version_is_incremented_for_japan_only(self) -> None:
         source = (ROOT / "src/main/main.cpp").read_text()
-        self.assertIn('#ifdef GOEMON_JAPAN_NATIVE\nconst std::string version_string = "0.2.25-dev";', source)
-        self.assertIn('const std::string version_string = "0.2.3-dev";', source)
+        self.assertIn('const std::string version_string = GOEMON_LAUNCHER_VERSION;', source)
         self.assertIn('jp_timer_build_mode = " [timer-stage1]"', source)
         self.assertIn('jp_timer_build_mode = " [timer-off]"', source)
         launcher = (ROOT / "src/ui/ui_launcher.cpp").read_text()

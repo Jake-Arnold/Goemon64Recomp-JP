@@ -99,15 +99,18 @@ def generate(repo_root: Path, splat: Path, asm_root: Path, rom: Path, *,
     }
 
 
-def apply_verified_native_hooks(generated_dir: Path, japanese_rom: Path) -> dict:
+def apply_verified_native_hooks(generated_dir: Path, japanese_rom: Path, *,
+                                widescreen: bool = False) -> dict:
     """Patch only private generated code, after independent ROM and anchor gates."""
     try:
+        from .jp_camera_widescreen import inject as patch_widescreen
         from .jp_loader_hook import check_rom as verify_loader_rom, inject as patch_loader
         from .relocate_task_callbacks import validate_rom as verify_callbacks_rom, inject as patch_callbacks
         from .jp_data_fixups import validate_rom as verify_data_rom, inject as patch_data
         from .jp_file80_data_fixups import validate_rom as verify_file80_rom, inject as patch_file80
         from .jp_sasuke_bomb_camera_fix import validate_rom as verify_sasuke_rom, inject as patch_sasuke
     except ImportError:
+        from jp_camera_widescreen import inject as patch_widescreen
         from jp_loader_hook import check_rom as verify_loader_rom, inject as patch_loader
         from relocate_task_callbacks import validate_rom as verify_callbacks_rom, inject as patch_callbacks
         from jp_data_fixups import validate_rom as verify_data_rom, inject as patch_data
@@ -128,6 +131,8 @@ def apply_verified_native_hooks(generated_dir: Path, japanese_rom: Path) -> dict
         (generated_dir / "funcs_8.c", patch_file80),
         (generated_dir / "funcs_32.c", patch_sasuke),
     ]
+    if widescreen:
+        targets.append((generated_dir / "funcs_8.c", patch_widescreen))
     # Stage all patches in memory, including multiple transforms of funcs_8.c.
     # A failed ROM/anchor gate must not leave a half-patched generated directory.
     prepared = {}
@@ -182,7 +187,7 @@ def main() -> int:
             cfg = tomllib.loads((args.repo_root / 'mnsg.japan.toml').read_text())['input']
             generated_dir = args.repo_root / cfg['output_func_path']
             report.update(apply_verified_native_hooks(
-                generated_dir, args.japan_decompressed_rom.resolve()
+                generated_dir, args.japan_decompressed_rom.resolve(), widescreen=True
             ))
     print(json.dumps(report,indent=2))
     return 0

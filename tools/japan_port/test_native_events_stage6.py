@@ -180,8 +180,7 @@ class NativeEventStage6Tests(unittest.TestCase):
     def test_version_in_launcher_title_and_cli(self) -> None:
         main = (ROOT / "src/main/main.cpp").read_text()
         ui = (ROOT / "src/ui/ui_launcher.cpp").read_text()
-        self.assertIn('const std::string version_string = "0.2.25-dev"', main)
-        self.assertIn('const std::string version_string = "0.2.3-dev"', main)
+        self.assertIn('const std::string version_string = GOEMON_LAUNCHER_VERSION', main)
         self.assertIn('jp_events_build_mode = " [native-events-audit]"', main)
         self.assertIn('version_string += " [native-events-audit]"', ui)
         # Later stages may append additional CLI build labels after stage 6.

@@ -1,4 +1,6 @@
 #include "goemon_config.h"
+#include "goemon_launcher.h"
+#include <atomic>
 #include "recomp_input.h"
 #include "goemon_sound.h"
 #include "goemon_render.h"
@@ -131,7 +133,7 @@ namespace recomp {
     }
 }
 
-std::filesystem::path goemon64::get_app_folder_path() {
+std::filesystem::path goemon64::get_app_folder_path(std::u8string_view edition_program_id) {
    // directly check for portable.txt (windows and native linux binary)
    if (std::filesystem::exists("portable.txt")) {
        return std::filesystem::current_path();
@@ -152,7 +154,7 @@ std::filesystem::path goemon64::get_app_folder_path() {
    PWSTR known_path = NULL;
    HRESULT result = SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, NULL, &known_path);
    if (result == S_OK) {
-       recomp_dir = std::filesystem::path{known_path} / goemon64::program_id;
+       recomp_dir = std::filesystem::path{known_path} / edition_program_id;
    }
 
    CoTaskMemFree(known_path);
@@ -165,7 +167,7 @@ std::filesystem::path goemon64::get_app_folder_path() {
 #if defined(__APPLE__)
    const auto supportdir = goemon64::get_application_support_directory();
    if (supportdir) {
-       return *supportdir / goemon64::program_id;
+       return *supportdir / edition_program_id;
    }
 #endif
 
@@ -180,11 +182,23 @@ std::filesystem::path goemon64::get_app_folder_path() {
    }
 
    if (homedir != nullptr) {
-       recomp_dir = std::filesystem::path{homedir} / (std::u8string{u8".config/"} + std::u8string{goemon64::program_id});
+       recomp_dir = std::filesystem::path{homedir} / (std::u8string{u8".config/"} + std::u8string{edition_program_id});
    }
 #endif
 
     return recomp_dir;
+}
+
+std::filesystem::path goemon64::get_app_folder_path() {
+    const auto& profile = launcher::experimental_profile_path();
+    if (!profile.empty()) {
+        return profile;
+    }
+    const auto base = get_app_folder_path(program_id);
+    if (!base.empty() && launcher::experimental_rom_mode()) {
+        return base / "experimental-roms" / program_id;
+    }
+    return base;
 }
 
 bool read_json(std::ifstream input_file, nlohmann::json& json_out) {
@@ -311,7 +325,7 @@ void assign_all_mappings(recomp::InputDevice device, const recomp::DefaultN64Map
     assign_mapping_complete(device, recomp::GameInput::TOGGLE_MENU, values.toggle_menu);
     assign_mapping_complete(device, recomp::GameInput::ACCEPT_MENU, values.accept_menu);
     assign_mapping_complete(device, recomp::GameInput::APPLY_MENU, values.apply_menu);
-#ifdef GOEMON_JAPAN_NATIVE
+#if defined(GOEMON_JAPAN_NATIVE) || defined(GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE)
     assign_mapping_complete(device, recomp::GameInput::RESET_GAME, values.reset_game);
 #endif
 };
@@ -342,7 +356,23 @@ void goemon64::reset_single_input_binding(recomp::InputDevice device, recomp::Ga
     );
 }
 
+namespace {
+    std::atomic_bool show_fps{false};
+    std::atomic<goemon64::FpsCorner> fps_corner{goemon64::FpsCorner::TopRight};
+}
+
+bool goemon64::get_show_fps() { return show_fps.load(); }
+void goemon64::set_show_fps(bool show) { show_fps.store(show); }
+goemon64::FpsCorner goemon64::get_fps_corner() { return fps_corner.load(); }
+void goemon64::set_fps_corner(FpsCorner corner) {
+    if (corner >= FpsCorner::TopLeft && corner <= FpsCorner::BottomRight) {
+        fps_corner.store(corner);
+    }
+}
+
 void reset_graphics_options() {
+    goemon64::set_show_fps(false);
+    goemon64::set_fps_corner(goemon64::FpsCorner::TopRight);
     ultramodern::renderer::GraphicsConfig new_config{};
     new_config.res_option = res_default;
     new_config.wm_option = wm_default();
@@ -360,6 +390,8 @@ void reset_graphics_options() {
 bool save_graphics_config(const std::filesystem::path& path) {
     nlohmann::json config_json{};
     ultramodern::to_json(config_json, ultramodern::renderer::get_graphics_config());
+    config_json["show_fps"] = goemon64::get_show_fps();
+    config_json["fps_corner"] = static_cast<int>(goemon64::get_fps_corner());
     return save_json_with_backups(path, config_json);
 }
 
@@ -372,6 +404,10 @@ bool load_graphics_config(const std::filesystem::path& path) {
     ultramodern::renderer::GraphicsConfig new_config{};
     ultramodern::from_json(config_json, new_config);
     ultramodern::renderer::set_graphics_config(new_config);
+    goemon64::set_show_fps(from_or_default(config_json, "show_fps", false));
+    goemon64::set_fps_corner(goemon64::FpsCorner::TopRight);
+    goemon64::set_fps_corner(static_cast<goemon64::FpsCorner>(
+        from_or_default(config_json, "fps_corner", 1)));
     return true;
 }
 
@@ -480,10 +516,20 @@ bool load_sound_config(const std::filesystem::path& path) {
     return true;
 }
 
+static std::filesystem::path settings_folder() {
+#ifdef GOEMON_UNIFIED_REGIONS
+    // Settings belong to the launcher; selecting a game changes only its
+    // ROM, mod and save profile.
+    return goemon64::get_app_folder_path(goemon64::program_id);
+#else
+    return goemon64::get_app_folder_path();
+#endif
+}
+
 void goemon64::load_config() {
     detect_steam_deck();
 
-    std::filesystem::path recomp_dir = goemon64::get_app_folder_path();
+    std::filesystem::path recomp_dir = settings_folder();
     std::filesystem::path general_path = recomp_dir / general_filename;
     std::filesystem::path graphics_path = recomp_dir / graphics_filename;
     std::filesystem::path controls_path = recomp_dir / controls_filename;
@@ -518,7 +564,7 @@ void goemon64::load_config() {
 }
 
 void goemon64::save_config() {
-    std::filesystem::path recomp_dir = goemon64::get_app_folder_path();
+    std::filesystem::path recomp_dir = settings_folder();
 
     if (recomp_dir.empty()) {
         return;

@@ -17,6 +17,12 @@ namespace goemon64 {
     // TODO: Move loading configs to the runtime once we have a way to allow per-project customization.
     void load_config();
     void save_config();
+
+    enum class FpsCorner { TopLeft, TopRight, BottomLeft, BottomRight };
+    bool get_show_fps();
+    void set_show_fps(bool show);
+    FpsCorner get_fps_corner();
+    void set_fps_corner(FpsCorner corner);
     
     void reset_input_bindings();
     void reset_cont_input_bindings();
@@ -24,6 +30,7 @@ namespace goemon64 {
     void reset_single_input_binding(recomp::InputDevice device, recomp::GameInput input);
 
     std::filesystem::path get_app_folder_path();
+    std::filesystem::path get_app_folder_path(std::u8string_view edition_program_id);
     
     bool get_debug_mode_enabled();
     void set_debug_mode_enabled(bool enabled);

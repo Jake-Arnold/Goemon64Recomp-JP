@@ -70,8 +70,7 @@ class JapanGenerationStage13(unittest.TestCase):
     def test_version_and_launcher_usa_unchanged(self):
         main = (ROOT / "src/main/main.cpp").read_text(encoding="utf-8")
         ui = (ROOT / "src/ui/ui_launcher.cpp").read_text(encoding="utf-8")
-        self.assertIn('version_string = "0.2.25-dev"', main)
-        self.assertIn('version_string = "0.2.3-dev"', main)
+        self.assertIn('version_string = GOEMON_LAUNCHER_VERSION', main)
         self.assertIn('jp_generation_build_mode = " [generation-admission]"', main)
         self.assertIn('version_string += " [generation-admission]"', ui)
 

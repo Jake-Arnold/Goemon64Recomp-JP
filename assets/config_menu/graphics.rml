@@ -228,6 +228,19 @@
                             <div class="config-option__details" data-if="!sample_positions_supported">Not available (missing sample positions support)</div>
                         </div>
                     </div>
+                    <div class="config-option">
+                        <label class="config-option__title">FPS Counter</label>
+                        <div class="config-option__list">
+                            <input id="show_fps" type="checkbox" data-checked="show_fps"/>
+                            <label for="show_fps">Show FPS</label>
+                            <select id="fps_corner" data-value="fps_corner" data-attrif-disabled="!show_fps">
+                                <option value="0">Top left</option>
+                                <option value="1">Top right</option>
+                                <option value="2">Bottom left</option>
+                                <option value="3">Bottom right</option>
+                            </select>
+                        </div>
+                    </div>
                 </div>
                 <div class="config__wrapper">
                     <p data-if="cur_config_index == 0">

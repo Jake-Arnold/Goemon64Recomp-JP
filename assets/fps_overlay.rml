@@ -1,0 +1,14 @@
+<rml>
+    <head>
+        <style>
+            body { width: 100%; height: 100%; pointer-events: none; }
+            #fps { position: absolute; padding: 5dp 10dp; font-family: LatoLatin;
+                   font-size: 22dp; color: white; background-color: #000000B0; }
+            #fps.top-left { top: 16dp; left: 16dp; }
+            #fps.top-right { top: 16dp; right: 16dp; }
+            #fps.bottom-left { bottom: 16dp; left: 16dp; }
+            #fps.bottom-right { bottom: 16dp; right: 16dp; }
+        </style>
+    </head>
+    <body><div id="fps" class="top-right">FPS</div></body>
+</rml>

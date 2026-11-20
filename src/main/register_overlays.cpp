@@ -1,9 +1,16 @@
 #include "ovl_patches.hpp"
+#ifdef GOEMON_UNIFIED_REGIONS
+#include "goemon_usa_symbols.h"
+#endif
 #include "../../RecompiledFuncs/recomp_overlays.inl"
 
 #include "librecomp/overlays.hpp"
 
+#ifdef GOEMON_UNIFIED_REGIONS
+void goemon64::register_usa_overlays() {
+#else
 void goemon64::register_overlays() {
+#endif
     recomp::overlays::overlay_section_table_data_t sections {
         .code_sections = section_table,
         .num_code_sections = ARRLEN(section_table),

@@ -9,6 +9,16 @@
 				width: 100%;
 				height: 100%;
 			}
+			.subtitle-title[selected],
+			.subtitle-title[selected]:focus
+			{
+				color: #F6BE72;
+			}
+			.launcher__background-wrapper,
+			.launcher__background-mm
+			{
+				pointer-events: none;
+			}
 		</style>
 	</head>
 	<body>
@@ -16,22 +26,36 @@
 			<div class="launcher">
 				<div class="launcher__vertical-split">
 					<div class="launcher__title-quadrant">
-						<button class="subtitle-title" disabled>
+						<button class="subtitle-title" onclick="select_usa" data-attrif-selected="!selected_japan" data-attrif-disabled="!usa_available">
 							<div><h3>Goemon 64: Recompiled</h3></div>
-							<div><h1>Goemon's Great Adventure</h1></div>
-							<div class="subtitle-title__disclaimer">Coming Soon™</div>
+							<div><h1>Mystical Ninja Starring Goemon</h1></div>
+							<div class="subtitle-title__disclaimer" data-if="usa_available">USA</div>
+							<div class="subtitle-title__disclaimer" data-if="!usa_available">Edition unavailable</div>
 						</button>
 					</div>
-					<div class="launcher__content-quadrant"></div>
+					<div class="launcher__content-quadrant">
+						<label data-if="experimental_roms">Experimental ROM mode</label>
+						<label data-if="update_status != ''">{{update_status}}</label>
+						<button onclick="check_updates" class="menu-list-item" data-attrif-disabled="update_pending">
+							<div class="menu-list-item__bullet"></div>
+							<div class="menu-list-item__label">Check for updates</div>
+						</button>
+						<button data-if="update_available" onclick="open_releases" class="menu-list-item">
+							<div class="menu-list-item__bullet"></div>
+							<div class="menu-list-item__label">View release</div>
+						</button>
+					</div>
 				</div>
 				<div class="launcher__vertical-split launcher__vertical-split--right">
 					<div class="launcher__background-wrapper">
 						<svg src="goemon-clipped.svg" class="launcher__background-mm" />
 					</div>
 					<div class="launcher__title-quadrant launcher__title-quadrant--right">
-						<button class="subtitle-title subtitle-title--right" selected>
+						<button class="subtitle-title subtitle-title--right" onclick="select_japan" data-attrif-selected="selected_japan" data-attrif-disabled="!japan_available">
 							<div><h3>Goemon 64: Recompiled</h3></div>
-							<div><h1>Mystical Ninja Starring Goemon</h1></div>
+							<div><h1>Ganbare Goemon: Neo Momoyama Bakufu no Odori</h1></div>
+							<div class="subtitle-title__disclaimer" data-if="japan_available">Japan</div>
+							<div class="subtitle-title__disclaimer" data-if="!japan_available">Edition unavailable</div>
 						</button>
 					</div>
 					<div class="launcher__content-quadrant">
@@ -41,7 +65,11 @@
 						</button>
 						<button data-if="mm_rom_valid" onclick="start_game" class="menu-list-item menu-list-item--right" autofocus>
 							<div class="menu-list-item__bullet"></div>
-							<div class="menu-list-item__label">Start Game</div>
+							<div class="menu-list-item__label">Start Game · {{selected_japan ? 'Japan' : 'USA'}}</div>
+						</button>
+						<button data-if="mm_rom_valid" onclick="select_rom" class="menu-list-item menu-list-item--right">
+							<div class="menu-list-item__bullet"></div>
+							<div class="menu-list-item__label">Change ROM</div>
 						</button>
 						<button onclick="open_controls" class="menu-list-item menu-list-item--right">
 							<div class="menu-list-item__bullet"></div>
@@ -62,7 +90,7 @@
 					</div>
 				</div>
 				<div class="bottom-left">
-					<label>v{{version_number}}</label>
+					<label data-attr-title="version_number">v{{launcher_version}}</label>
 				</div>
 			</div>
 		</div>

@@ -153,10 +153,15 @@ add_custom_command(OUTPUT
 
 # Main executable
 add_executable(Goemon64Recompiled)
+# Both regional executables ship under the same release tag.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/VERSION")
+file(STRINGS "${CMAKE_SOURCE_DIR}/VERSION" GOEMON_LAUNCHER_VERSION LIMIT_COUNT 1)
+target_compile_definitions(Goemon64Recompiled PRIVATE GOEMON_LAUNCHER_VERSION="${GOEMON_LAUNCHER_VERSION}")
 
 set (SOURCES
     ${CMAKE_SOURCE_DIR}/src/main/main.cpp
     ${CMAKE_SOURCE_DIR}/src/main/support.cpp
+    ${CMAKE_SOURCE_DIR}/src/main/launcher.cpp
     ${CMAKE_SOURCE_DIR}/src/main/register_overlays.cpp
     ${CMAKE_SOURCE_DIR}/src/main/register_patches.cpp
     ${CMAKE_SOURCE_DIR}/src/main/rt64_render_context.cpp
@@ -1079,20 +1084,13 @@ if(GOEMON_BUILD_JAPAN)
         "${CMAKE_SOURCE_DIR}/src/main/register_overlays_japan.cpp"
         "${CMAKE_SOURCE_DIR}/src/main/register_patches_japan.cpp")
     add_executable(Goemon64RecompiledJP ${JP_SOURCES})
-    if(GOEMON_JP_INTEGRATED_F8_RESET_EXPERIMENTAL)
-        # librecomp is shared with the USA executable in this build.
-        # USA has no JP SDL audio reset callback: resolve the symbol with
-        # a fail-closed USA-only stub, never included in JP_SOURCES.
-        # Add AFTER taking the JP_SOURCES snapshot above.
-        target_sources(Goemon64Recompiled PRIVATE
-            "${CMAKE_SOURCE_DIR}/src/main/jp_integrated_audio_unavailable_usa.cpp")
-    endif()
     # Linux-only standalone crash/session logging; never linked into USA.
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         target_sources(Goemon64RecompiledJP PRIVATE
             "${CMAKE_SOURCE_DIR}/src/main/jp_session_logging.cpp")
     endif()
-    target_compile_definitions(Goemon64RecompiledJP PRIVATE GOEMON_JAPAN_NATIVE)
+    target_compile_definitions(Goemon64RecompiledJP PRIVATE
+        GOEMON_JAPAN_NATIVE GOEMON_LAUNCHER_VERSION="${GOEMON_LAUNCHER_VERSION}")
     if(GOEMON_JP_TIMER_STAGE1)
         target_compile_definitions(Goemon64RecompiledJP PRIVATE GOEMON_JP_TIMER_STAGE1_ACTIVE)
     endif()
@@ -1148,9 +1146,15 @@ if(GOEMON_BUILD_JAPAN)
         target_compile_definitions(Goemon64RecompiledJP PRIVATE GOEMON_JP_TIMER_EPOCH_STAGE18_ACTIVE)
     endif()
     if(GOEMON_JP_INTEGRATED_F8_RESET_EXPERIMENTAL)
-        target_compile_definitions(Goemon64RecompiledJP PRIVATE GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE)
+        # Each executable owns its SDL audio queue. Both use the same
+        # integrated runtime when this build option is enabled.
+        foreach(region_target Goemon64Recompiled Goemon64RecompiledJP)
+            target_compile_definitions(${region_target} PRIVATE
+                GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE GOEMON_JP_SDL_AUDIO_STAGE15_ACTIVE)
+        endforeach()
     endif()
     if(GOEMON_JP_NATIVE_F6_PAUSE)
+        target_compile_definitions(Goemon64Recompiled PRIVATE GOEMON_JP_NATIVE_F6_PAUSE_ACTIVE)
         target_compile_definitions(Goemon64RecompiledJP PRIVATE GOEMON_JP_NATIVE_F6_PAUSE_ACTIVE)
     endif()
     # Regenerate the build-commit identifier on every JP build. The script
@@ -1177,8 +1181,41 @@ if(GOEMON_BUILD_JAPAN)
     if(JP_LINK_OPTS)
         target_link_options(Goemon64RecompiledJP PRIVATE ${JP_LINK_OPTS})
     endif()
+    target_link_libraries(Goemon64RecompiledJP PRIVATE "${GOEMON_JAPAN_STATIC_LIB}")
+    option(GOEMON_UNIFIED_REGIONS "Play USA and Japan in the same Linux executable" ${GOEMON_JP_INTEGRATED_F8_RESET_EXPERIMENTAL})
+    if(GOEMON_UNIFIED_REGIONS)
+        if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT GOEMON_JP_INTEGRATED_F8_RESET_EXPERIMENTAL)
+            message(FATAL_ERROR "Unified regions require Linux and the integrated reset runtime")
+        endif()
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        find_program(GOEMON_ARCHIVE_NM NAMES llvm-nm nm REQUIRED)
+        find_program(GOEMON_ARCHIVE_OBJCOPY NAMES llvm-objcopy objcopy REQUIRED)
+        set(USA_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/usa-namespaced")
+        # The archive filenames are the static-library prefix/suffix on Linux.
+        set(USA_GENERATED_FUNCS "${USA_GENERATED_DIR}/libRecompiledFuncs.a")
+        set(USA_GENERATED_PATCHES "${USA_GENERATED_DIR}/libPatchesLib.a")
+        set(USA_SYMBOL_HEADER "${USA_GENERATED_DIR}/goemon_usa_symbols.h")
+        set(USA_NAMESPACE_SCRIPT "${CMAKE_SOURCE_DIR}/tools/japan_port/namespace_usa_archives.py")
+        add_custom_command(
+            OUTPUT "${USA_GENERATED_FUNCS}" "${USA_GENERATED_PATCHES}" "${USA_SYMBOL_HEADER}"
+            COMMAND "${Python3_EXECUTABLE}" "${USA_NAMESPACE_SCRIPT}"
+                --nm "${GOEMON_ARCHIVE_NM}" --objcopy "${GOEMON_ARCHIVE_OBJCOPY}"
+                --output "${USA_GENERATED_DIR}"
+                "$<TARGET_FILE:RecompiledFuncs>" "$<TARGET_FILE:PatchesLib>"
+            DEPENDS RecompiledFuncs PatchesLib "${USA_NAMESPACE_SCRIPT}"
+            VERBATIM)
+        add_custom_target(goemon_usa_namespaced DEPENDS
+            "${USA_GENERATED_FUNCS}" "${USA_GENERATED_PATCHES}" "${USA_SYMBOL_HEADER}")
+        add_dependencies(Goemon64RecompiledJP goemon_usa_namespaced)
+        target_compile_definitions(Goemon64RecompiledJP PRIVATE GOEMON_UNIFIED_REGIONS)
+        target_include_directories(Goemon64RecompiledJP PRIVATE "${USA_GENERATED_DIR}")
+        target_sources(Goemon64RecompiledJP PRIVATE
+            "${CMAKE_SOURCE_DIR}/src/main/register_overlays.cpp"
+            "${CMAKE_SOURCE_DIR}/src/main/register_patches.cpp")
+        target_link_libraries(Goemon64RecompiledJP PRIVATE
+            "${USA_GENERATED_PATCHES}" "${USA_GENERATED_FUNCS}")
+    endif()
     target_link_libraries(Goemon64RecompiledJP PRIVATE
-        "${GOEMON_JAPAN_STATIC_LIB}"
         librecomp ultramodern rt64
         RmlUi::Core RmlUi::Debugger nfd lunasvg)
     if(CMAKE_SYSTEM_NAME MATCHES "Linux")

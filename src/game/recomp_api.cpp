@@ -69,6 +69,25 @@ extern "C" void recomp_get_window_resolution(uint8_t* rdram, recomp_context* ctx
     MEM_W(0, height_out) = (u32)height;
 }
 
+extern "C" void goemon_jp_widen_camera_scissor(int32_t* upper, int32_t* lower) {
+    if (ultramodern::renderer::get_graphics_config().ar_option !=
+        ultramodern::renderer::AspectRatio::Expand) {
+        return;
+    }
+    // The original JP camera writes (8, 16)–(312, 224) in quarter-pixel
+    // coordinates. Preserve other scissor rectangles, including cutscenes.
+    if (static_cast<uint32_t>(*upper) != 0xED020040u ||
+        static_cast<uint32_t>(*lower) != 0x004E0380u) {
+        return;
+    }
+    int width, height;
+    recompui::get_window_size(width, height);
+    if (height > 0 && 3LL * width > 4LL * height) {
+        *upper = static_cast<int32_t>(0xED000000u);
+        *lower = 0x005003C0;
+    }
+}
+
 extern "C" void recomp_get_target_aspect_ratio(uint8_t* rdram, recomp_context* ctx) {
     ultramodern::renderer::GraphicsConfig graphics_config = ultramodern::renderer::get_graphics_config();
     float original = _arg<0, float>(rdram, ctx);

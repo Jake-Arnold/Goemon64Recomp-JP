@@ -118,8 +118,7 @@ class GuestThreadAuditTests(unittest.TestCase):
 
     def test_japan_version_and_mode_markers(self) -> None:
         main = (ROOT / "src/main/main.cpp").read_text()
-        self.assertIn('version_string = "0.2.25-dev"', main)
-        self.assertIn('version_string = "0.2.3-dev"', main)
+        self.assertIn('version_string = GOEMON_LAUNCHER_VERSION', main)
         self.assertIn('[threads-audit]', main)
         self.assertIn('[threads-off]', main)
         launcher = (ROOT / "src/ui/ui_launcher.cpp").read_text()

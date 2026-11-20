@@ -56,17 +56,16 @@ class ResetInputPreflightTests(unittest.TestCase):
 
     def test_usa_build_is_not_changed_by_jp_reset(self) -> None:
         header = source("include/recomp_input.h")
-        self.assertIn("#ifdef GOEMON_JAPAN_NATIVE\n    #define DEFINE_JP_RESET_INPUT()", header)
+        self.assertIn("#if defined(GOEMON_JAPAN_NATIVE) || defined(GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE)\n    #define DEFINE_JP_RESET_INPUT()", header)
         self.assertIn("#else\n    #define DEFINE_JP_RESET_INPUT()\n#endif", header)
         defaults = source("src/game/input.cpp")
-        self.assertRegex(defaults, r"(?s)#ifdef GOEMON_JAPAN_NATIVE\n    \.reset_game")
+        self.assertRegex(defaults, r"(?s)#if defined\(GOEMON_JAPAN_NATIVE\) \|\| defined\(GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE\)\n    \.reset_game")
         config = source("src/game/config.cpp")
-        self.assertIn("#ifdef GOEMON_JAPAN_NATIVE\n    assign_mapping_complete(device, recomp::GameInput::RESET_GAME", config)
+        self.assertIn("#if defined(GOEMON_JAPAN_NATIVE) || defined(GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE)\n    assign_mapping_complete(device, recomp::GameInput::RESET_GAME", config)
 
     def test_version_and_build_fingerprint(self) -> None:
         text = source("src/main/main.cpp")
-        self.assertIn('#ifdef GOEMON_JAPAN_NATIVE\nconst std::string version_string = "0.2.25-dev";', text)
-        self.assertIn('const std::string version_string = "0.2.3-dev";', text)
+        self.assertIn('const std::string version_string = GOEMON_LAUNCHER_VERSION;', text)
         self.assertIn('GOEMON_JP_BUILD_COMMIT', text)
 
 

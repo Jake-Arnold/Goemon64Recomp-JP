@@ -45,48 +45,14 @@ class IntegratedResetTests(unittest.TestCase):
             "GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE)",
             self.cmake)
 
-    def test_usa_only_fail_closed_audio_bridge_links(self):
-        # Both native executables link the same experimental librecomp
-        # archive. JP defines the real SDL callback in main.cpp, while
-        # the USA executable needs its own fail-closed symbol.
-        stub_path = ROOT / "src/main/jp_integrated_audio_unavailable_usa.cpp"
-        stub = stub_path.read_text(encoding="utf-8")
-        symbol = "bool jp_reset_audio_buffer_after_join()"
-        self.assertIn(symbol, stub)
-        self.assertIn("return false;", stub)
-        self.assertIn("namespace recomp {", stub)
-        self.assertIn(symbol, self.front)
+    def test_both_regional_frontends_link_the_real_audio_bridge(self):
+        self.assertIn("bool jp_reset_audio_buffer_after_join()", self.front)
         self.assertIn(
-            '#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE',
-            self.front)
+            "foreach(region_target Goemon64Recompiled Goemon64RecompiledJP)", self.cmake)
         self.assertIn(
-            "target_sources(Goemon64Recompiled PRIVATE\n"
-            '            "${CMAKE_SOURCE_DIR}/src/main/jp_integrated_audio_unavailable_usa.cpp")',
+            "GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE GOEMON_JP_SDL_AUDIO_STAGE15_ACTIVE",
             self.cmake)
-        # The JP target snapshots the USA source list *before* the stub is
-        # added to the USA executable; no duplicate JP symbol.
-        snapshot = self.cmake.index(
-            "get_target_property(JP_SOURCES Goemon64Recompiled SOURCES)")
-        stub_source = self.cmake.index(
-            "src/main/jp_integrated_audio_unavailable_usa.cpp")
-        self.assertGreater(stub_source, snapshot)
-        compiler = shutil.which("clang++") or shutil.which("g++")
-        if compiler is None:
-            self.skipTest("No C++ compiler installed")
-        with tempfile.TemporaryDirectory() as td:
-            test_cpp = Path(td) / "test_usa_audio_link.cpp"
-            binary = Path(td) / "test_usa_audio_link"
-            test_cpp.write_text(
-                "namespace recomp { bool jp_reset_audio_buffer_after_join(); }\n"
-                "int main() { return recomp::jp_reset_audio_buffer_after_join() "
-                "? 1 : 0; }\n",
-                encoding="utf-8")
-            subprocess.run(
-                [compiler, "-std=c++20", "-Wall", "-Wextra", "-Werror",
-                 str(test_cpp), str(stub_path), "-o", str(binary)],
-                check=True, cwd=ROOT, timeout=45)
-            subprocess.run([str(binary)], check=True, cwd=ROOT,
-                           timeout=15)
+        self.assertNotIn("jp_integrated_audio_unavailable_usa.cpp", self.cmake)
 
     def test_seven_generated_runtime_owners_together(self):
         for name in ("threads_reset.cpp", "threadqueue_integrated.cpp", "mesgqueue_integrated.cpp", "events_integrated.cpp",
@@ -196,12 +162,10 @@ class IntegratedResetTests(unittest.TestCase):
             function.index("find_it->second.has_compressed_code = true;"),
             function.index("if (find_it->second.has_compressed_code) {"))
         self.assertLess(
-            function.index("if (game_id == u8\"mnsg.jp\""),
+            function.index('game_id == u8"mnsg.jp" || game_id == u8"mnsg.us"'),
             function.index("find_it->second.has_compressed_code = true;"))
         self.assertIn("find_it->second.has_compressed_code = false;", function)
-        self.assertIn("restoring compressed JP ROM", function)
-        # USA has no such condition; the only forced restoration is mnsg.jp.
-        self.assertNotIn('game_id == u8"mnsg.us"', function)
+        self.assertIn("restoring compressed game ROM", function)
 
     def test_rearms_guest_timer_events_and_saving(self):
         for token in ("jp_rearm_guest_after_verified_exit",

@@ -176,8 +176,7 @@ class NativeBootSaveAudioStage7Tests(unittest.TestCase):
     def test_version_is_jp_only(self):
         main = (ROOT / "src/main/main.cpp").read_text()
         ui = (ROOT / "src/ui/ui_launcher.cpp").read_text()
-        self.assertIn('const std::string version_string = "0.2.25-dev"', main)
-        self.assertIn('const std::string version_string = "0.2.3-dev"', main)
+        self.assertIn('const std::string version_string = GOEMON_LAUNCHER_VERSION', main)
         self.assertIn('jp_boot_build_mode = " [boot-save-audio-audit]"', main)
         self.assertIn('version_string += " [boot-save-audio-audit]"', ui)
 

@@ -103,7 +103,7 @@ experimental branch:
    `game_id==u8"mnsg.jp"` before **every** stored-ROM load. The
    runtime still resets the flag to false after actual decompression
    for compatibility with the existing mod-loading path. On replay,
-   expect `[Goemon JP integrated reset] restoring compressed JP ROM
+   expect `[Goemon JP integrated reset] restoring compressed game ROM
    before entrypoint replay.`.
 2. `ultramodern/src/threadqueue.cpp` keeps a native
    `running_queue_impl` pointer outside RDRAM; old guest OSThread

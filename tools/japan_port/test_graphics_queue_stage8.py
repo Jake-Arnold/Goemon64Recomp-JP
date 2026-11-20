@@ -145,8 +145,7 @@ class GraphicsQueueStage8Tests(unittest.TestCase):
     def test_version_identifies_active_mode_without_changing_usa(self):
         main = (ROOT / "src/main/main.cpp").read_text()
         ui = (ROOT / "src/ui/ui_launcher.cpp").read_text()
-        self.assertIn('version_string = "0.2.25-dev"', main)
-        self.assertIn('version_string = "0.2.3-dev"', main)
+        self.assertIn('version_string = GOEMON_LAUNCHER_VERSION', main)
         self.assertIn('jp_gfx_build_mode = " [graphics-queue-audit]"', main)
         self.assertIn('version_string += " [graphics-queue-audit]"', ui)
 

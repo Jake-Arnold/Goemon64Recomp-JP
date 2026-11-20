@@ -71,3 +71,44 @@ Voilà! You should now have a `Goemon64Recompiled` executable in the build direc
 
 > [!IMPORTANT]  
 > In the game itself, you should be using a standard ROM, not the decompressed one.
+
+### USA and Japan on one launcher
+
+On Linux, build with `GOEMON_BUILD_JAPAN=ON`, the existing integrated reset
+runtime, and `GOEMON_UNIFIED_REGIONS=ON`. Open `Goemon64RecompiledJP` with
+the shared assets. That executable contains both compiled game code sets.
+Select USA or Japan and choose **Start Game** in the same window.
+
+**Select ROM** and **Change ROM** apply to the highlighted edition. ROMs,
+mods and saves use their edition's profile. Controls, keybinds, graphics and
+audio use the shared launcher's settings profile (the existing Japanese
+configuration folder). The USA standalone executable remains available for
+builds using the older launcher setup.
+
+F8 resets the running game. F6 pauses or resumes it when native pause is
+enabled in the build.
+
+The launcher checks stable and test GitHub releases on demand using the
+system `curl` installation. Before each test build, bump `VERSION`
+(for example, `0.2.26-test.1` to `0.2.26-test.2`). After building and
+committing, publish the matching source to the standalone GitHub repository:
+
+```bash
+tools/japan_port/publish_test_build.sh /path/to/Goemon64RecompiledJP
+```
+
+The ROM picker accepts the original supported revisions. An N64 ROM rebuilt
+from a decompilation can be distributed as a patch for emulator or hardware
+play. Native play requires a recompilation built for that hack's ROM layout
+and content. Recomp mods are available through the existing **Mods** screen.
+
+For temporary patched ROM experiments on Ubuntu, launch with
+`GOEMON_EXPERIMENTAL_ANY_ROM=1`. Choose the edition the patch targets, then
+use **Select ROM** or **Change ROM** and **Start Game**. The picker accepts
+N64 ROM images without requiring a stock hash. The original decompressor
+and the installed compiled game code still run, so some inputs will fail.
+
+The game window shows the imported filename. Experimental imports and saves
+live under `experimental-roms` in the selected edition's configuration
+folder. Save profiles are keyed by edition and original filename. Reimport
+using the same filename to reuse that profile.

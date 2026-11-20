@@ -217,8 +217,7 @@ class PersistentLogTests(unittest.TestCase):
         self.assertLess(text.index("goemon_jp::logging::start_session("),
                         text.index("preload_executable(preload_context)"))
         self.assertIn('#if defined(__linux__) && defined(GOEMON_JAPAN_NATIVE)', text)
-        self.assertIn('version_string = "0.2.25-dev"', text)
-        self.assertIn('version_string = "0.2.3-dev"', text)
+        self.assertIn('version_string = GOEMON_LAUNCHER_VERSION', text)
 
     def test_only_japanese_linux_binary_links_the_logger(self):
         text = CMAKE.read_text()

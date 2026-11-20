@@ -90,8 +90,8 @@ class SdlAudioExitStage15Tests(unittest.TestCase):
             self.assertNotIn(forbidden, s)
 
     def test_normal_usa_build_unchanged(self):
-        self.assertIn('version_string = "0.2.3-dev"', MAIN)
-        self.assertIn('const std::string version_string = "0.2.25-dev"', MAIN)
+        self.assertIn('version_string = GOEMON_LAUNCHER_VERSION', MAIN)
+        self.assertIn('const std::string version_string = GOEMON_LAUNCHER_VERSION', MAIN)
         self.assertIn('jp_sdl_audio_build_mode = " [sdl-audio-exit]"', MAIN)
         self.assertIn('version_string += " [sdl-audio-exit]"', UI)
 

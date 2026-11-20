@@ -1,58 +1,193 @@
 #include "recomp_ui.h"
 #include "goemon_config.h"
 #include "goemon_support.h"
+#include "goemon_launcher.h"
 #include "librecomp/game.hpp"
+#include "librecomp/mods.hpp"
 #include "ultramodern/ultramodern.hpp"
 #include "RmlUi/Core.h"
-#include "nfd.h"
+#include <SDL.h>
+#include <chrono>
+#include <future>
+#include <utility>
 #include <filesystem>
 #ifdef GOEMON_JAPAN_NATIVE
 #include "goemon_japan_build_id.h"
 #endif
 
 static std::string version_string;
+static std::string launcher_version = GOEMON_LAUNCHER_VERSION;
+static std::string update_status;
+static bool update_available = false;
+static bool update_pending = false;
+static std::future<goemon64::launcher::UpdateResult> update_job;
+using goemon64::launcher::Action;
+#ifdef GOEMON_JAPAN_NATIVE
+static constexpr bool native_is_japan = true;
+#else
+static constexpr bool native_is_japan = false;
+#endif
+static bool selected_japan = native_is_japan;
+static bool native_rom_valid = false;
+static bool experimental_roms = goemon64::launcher::experimental_rom_mode();
+static bool usa_available = false;
+static bool japan_available = false;
+static Action startup_action = Action::None;
 
 Rml::DataModelHandle model_handle;
 bool mm_rom_valid = false;
 
 extern std::vector<recomp::GameEntry> supported_games;
 
-void select_rom() {
-    nfdnchar_t* native_path = nullptr;
-    goemon64::open_file_dialog([](bool success, const std::filesystem::path& path) {
-        if (success) {
-            recomp::RomValidationError rom_error = recomp::select_rom(path, supported_games[0].game_id);
-            switch (rom_error) {
-                case recomp::RomValidationError::Good:
+static bool rom_valid_for_edition(bool japan) {
+    if (experimental_roms) {
+        return goemon64::launcher::experimental_rom_selected(japan);
+    }
+#ifdef GOEMON_UNIFIED_REGIONS
+    return goemon64::launcher::region_rom_valid(japan);
+#else
+    return japan == native_is_japan ? native_rom_valid : goemon64::launcher::region_rom_valid(japan);
+#endif
+}
+
+static void select_edition(bool japan) {
+    selected_japan = japan;
+    mm_rom_valid = rom_valid_for_edition(japan);
+    model_handle.DirtyVariable("selected_japan");
+    model_handle.DirtyVariable("mm_rom_valid");
+    goemon64::launcher::queue_window_title(japan);
+}
+
+static void select_rom() {
+    const bool japan = selected_japan;
+    goemon64::open_file_dialog([japan](bool success, const std::filesystem::path& path) {
+        if (!success) {
+            return;
+        }
+        std::error_code size_error;
+        const auto size = std::filesystem::file_size(path, size_error);
+        if (size_error || size < 64) {
+            recompui::message_box("Could not read a complete N64 ROM header.");
+            return;
+        }
+        const auto error = experimental_roms
+            ? goemon64::launcher::import_experimental_rom(path, japan)
+#ifdef GOEMON_UNIFIED_REGIONS
+            : goemon64::launcher::import_region_rom(path, japan);
+#else
+            : japan == native_is_japan
+                ? recomp::select_rom(path, supported_games[0].game_id)
+                : goemon64::launcher::import_region_rom(path, japan);
+#endif
+        using Error = recomp::RomValidationError;
+        switch (error) {
+            case Error::Good:
+                if (!experimental_roms && japan == native_is_japan) {
+                    native_rom_valid = true;
+                }
+                if (selected_japan == japan) {
                     mm_rom_valid = true;
                     model_handle.DirtyVariable("mm_rom_valid");
-                    break;
-                case recomp::RomValidationError::FailedToOpen:
-                    recompui::message_box("Failed to open ROM file.");
-                    break;
-                case recomp::RomValidationError::NotARom:
-                    recompui::message_box("This is not a valid ROM file.");
-                    break;
-                case recomp::RomValidationError::IncorrectRom:
-                    recompui::message_box("This ROM is not the correct game.");
-                    break;
-                case recomp::RomValidationError::NotYet:
-                    recompui::message_box("This game isn't supported yet.");
-                    break;
-                case recomp::RomValidationError::IncorrectVersion:
-                    recompui::message_box(
-                            #ifdef GOEMON_JAPAN_NATIVE
-                            "This ROM is the correct game, but the wrong version.\nThe Japanese executable requires the Japanese NTSC-J revision.");
-#else
-                            "This ROM is the correct game, but the wrong version.\nThis project requires the NTSC-U N64 version of the game.");
-#endif
-                    break;
-                case recomp::RomValidationError::OtherError:
-                    recompui::message_box("An unknown error has occurred.");
-                    break;
-            }
+                    goemon64::launcher::queue_window_title(japan);
+                }
+                break;
+            case Error::FailedToOpen:
+                recompui::message_box("Failed to open ROM file.");
+                break;
+            case Error::NotARom:
+                recompui::message_box("This is not a valid N64 ROM file.");
+                break;
+            case Error::IncorrectRom:
+            case Error::IncorrectVersion:
+            case Error::NotYet:
+                recompui::message_box(japan
+                    ? "Select the original Japanese ROM. Patched ROMs need a compatible build."
+                    : "Select the original USA ROM. Patched ROMs need a compatible build.");
+                break;
+            case Error::OtherError:
+                recompui::message_box("Could not save the selected ROM.");
+                break;
         }
     });
+}
+
+static void run_edition_action(Action action) {
+    if (action == Action::None || (action == Action::Play && !mm_rom_valid)) {
+        return;
+    }
+#ifdef GOEMON_UNIFIED_REGIONS
+    if (action == Action::Play) {
+        if (goemon64::launcher::start_unified_game(selected_japan)) {
+            recompui::hide_all_contexts();
+        } else {
+            recompui::message_box("Could not open the selected ROM.");
+        }
+        return;
+    }
+    if (action == Action::Mods) {
+        if (!goemon64::launcher::select_unified_profile(selected_japan)) {
+            recompui::message_box("Could not open the selected edition's mod folder.");
+            return;
+        }
+        recomp::mods::close_mods();
+        recomp::register_config_path(goemon64::get_app_folder_path());
+        recomp::mods::initialize_mods();
+        recompui::update_mod_list();
+    }
+#else
+    if (action == Action::Play && experimental_roms &&
+        (selected_japan != native_is_japan || goemon64::launcher::experimental_profile_path().empty())) {
+        if (goemon64::launcher::request_experimental_game(selected_japan)) {
+            ultramodern::quit();
+        } else {
+            recompui::message_box("Could not start the selected edition.");
+        }
+        return;
+    }
+    if (selected_japan != native_is_japan) {
+        if (goemon64::launcher::request_other_region(action)) {
+            ultramodern::quit();
+        } else {
+            recompui::message_box("The other regional build was not found next to this executable.");
+        }
+        return;
+    }
+    if (action == Action::Play) {
+        recomp::start_game(supported_games[0].game_id);
+        recompui::hide_all_contexts();
+        return;
+    }
+#endif
+    const auto tab = action == Action::Controls ? recompui::ConfigTab::Controls
+                   : action == Action::Mods ? recompui::ConfigTab::Mods
+                   : recompui::ConfigTab::General;
+    recompui::set_config_tab(tab);
+    recompui::hide_all_contexts();
+    recompui::show_context(recompui::get_config_context_id(), "");
+}
+
+void recompui::set_launcher_action(std::string_view argument) {
+    startup_action = goemon64::launcher::action_from_argument(argument);
+}
+
+void recompui::update_launcher() {
+    if (!recompui::is_context_shown(recompui::get_launcher_context_id())) {
+        return;
+    }
+    run_edition_action(std::exchange(startup_action, Action::None));
+    if (update_pending && update_job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        try {
+            auto result = update_job.get();
+            update_status = std::move(result.status);
+            update_available = result.available;
+        } catch (const std::exception&) {
+            update_status = "Could not check for updates.";
+        }
+        update_pending = false;
+        model_handle.DirtyVariable("update_status");
+        model_handle.DirtyVariable("update_available");
+        model_handle.DirtyVariable("update_pending");
+    }
 }
 
 recompui::ContextId launcher_context;
@@ -64,17 +199,26 @@ recompui::ContextId recompui::get_launcher_context_id() {
 class LauncherMenu : public recompui::MenuController {
 public:
     LauncherMenu() {
-        mm_rom_valid = recomp::is_rom_valid(supported_games[0].game_id);
+        native_rom_valid = recomp::is_rom_valid(supported_games[0].game_id);
+#ifdef GOEMON_UNIFIED_REGIONS
+        mm_rom_valid = rom_valid_for_edition(selected_japan);
+        goemon64::launcher::queue_window_title(selected_japan);
+        usa_available = true;
+        japan_available = true;
+#else
+        mm_rom_valid = experimental_roms && goemon64::launcher::experimental_profile_path().empty()
+            ? goemon64::launcher::experimental_rom_selected(native_is_japan)
+            : native_rom_valid;
+        const bool other_available = goemon64::launcher::other_region_available();
+        usa_available = !native_is_japan || other_available;
+        japan_available = native_is_japan || other_available;
+#endif
     }
     ~LauncherMenu() override {
 
     }
     void load_document() override {
-		#ifdef GOEMON_JAPAN_NATIVE
-        launcher_context = recompui::create_context(goemon64::get_asset_path("launcher-jp.rml"));
-#else
         launcher_context = recompui::create_context(goemon64::get_asset_path("launcher.rml"));
-#endif
     }
     void register_events(recompui::UiEventListenerInstancer& listener) override {
         recompui::register_event(listener, "select_rom",
@@ -82,38 +226,48 @@ public:
                 select_rom();
             }
         );
-        recompui::register_event(listener, "rom_selected",
-            [](const std::string& param, Rml::Event& event) {
-                mm_rom_valid = true;
-                model_handle.DirtyVariable("mm_rom_valid");
+        recompui::register_event(listener, "start_game",
+            [](const std::string&, Rml::Event&) { run_edition_action(Action::Play); }
+        );
+        recompui::register_event(listener, "select_usa",
+            [](const std::string&, Rml::Event&) { if (usa_available) select_edition(false); }
+        );
+        recompui::register_event(listener, "select_japan",
+            [](const std::string&, Rml::Event&) { if (japan_available) select_edition(true); }
+        );
+        recompui::register_event(listener, "check_updates",
+            [](const std::string&, Rml::Event&) {
+                if (update_pending) {
+                    return;
+                }
+                update_available = false;
+                try {
+                    update_job = std::async(std::launch::async, goemon64::launcher::check_for_update);
+                    update_pending = true;
+                    update_status = "Checking for updates…";
+                } catch (const std::exception&) {
+                    update_status = "Could not start the update check.";
+                }
+                model_handle.DirtyVariable("update_status");
+                model_handle.DirtyVariable("update_available");
+                model_handle.DirtyVariable("update_pending");
             }
         );
-        recompui::register_event(listener, "start_game",
-            [](const std::string& param, Rml::Event& event) {
-                recomp::start_game(supported_games[0].game_id);
-                recompui::hide_all_contexts();
+        recompui::register_event(listener, "open_releases",
+            [](const std::string&, Rml::Event&) {
+                if (SDL_OpenURL(goemon64::launcher::releases_url) < 0) {
+                    recompui::message_box("Could not open the releases page in your browser.");
+                }
             }
         );
         recompui::register_event(listener, "open_controls",
-            [](const std::string& param, Rml::Event& event) {
-                recompui::set_config_tab(recompui::ConfigTab::Controls);
-                recompui::hide_all_contexts();
-                recompui::show_context(recompui::get_config_context_id(), "");
-            }
+            [](const std::string&, Rml::Event&) { run_edition_action(Action::Controls); }
         );
         recompui::register_event(listener, "open_settings",
-            [](const std::string& param, Rml::Event& event) {
-                recompui::set_config_tab(recompui::ConfigTab::General);
-                recompui::hide_all_contexts();
-                recompui::show_context(recompui::get_config_context_id(), "");
-            }
+            [](const std::string&, Rml::Event&) { run_edition_action(Action::Settings); }
         );
         recompui::register_event(listener, "open_mods",
-            [](const std::string &param, Rml::Event &event) {
-                recompui::set_config_tab(recompui::ConfigTab::Mods);
-                recompui::hide_all_contexts();
-                recompui::show_context(recompui::get_config_context_id(), "");
-            }
+            [](const std::string&, Rml::Event&) { run_edition_action(Action::Mods); }
         );
         recompui::register_event(listener, "exit_game",
             [](const std::string& param, Rml::Event& event) {
@@ -125,6 +279,13 @@ public:
         Rml::DataModelConstructor constructor = context->CreateDataModel("launcher_model");
 
         constructor.Bind("mm_rom_valid", &mm_rom_valid);
+        constructor.Bind("selected_japan", &selected_japan);
+        constructor.Bind("experimental_roms", &experimental_roms);
+        constructor.Bind("usa_available", &usa_available);
+        constructor.Bind("japan_available", &japan_available);
+        constructor.Bind("update_status", &update_status);
+        constructor.Bind("update_available", &update_available);
+        constructor.Bind("update_pending", &update_pending);
 
         version_string = recomp::get_project_version().to_string();
 #ifdef GOEMON_JAPAN_NATIVE
@@ -222,6 +383,7 @@ public:
 #endif
 #endif
         constructor.Bind("version_number", &version_string);
+        constructor.Bind("launcher_version", &launcher_version);
 
         model_handle = constructor.GetModelHandle();
     }

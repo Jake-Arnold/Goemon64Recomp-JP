@@ -36,6 +36,8 @@ namespace recompui {
     };
 
     std::unique_ptr<MenuController> create_launcher_menu();
+    void set_launcher_action(std::string_view argument);
+    void update_launcher();
     std::unique_ptr<MenuController> create_config_menu();
 
     using event_handler_t = void(const std::string& param, Rml::Event&);

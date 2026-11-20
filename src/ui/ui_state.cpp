@@ -161,6 +161,12 @@ class UIState {
     std::unique_ptr<recompui::MenuController> launcher_menu_controller{};
     std::unique_ptr<recompui::MenuController> config_menu_controller{};
     std::vector<ContextDetails> shown_contexts{};
+    Rml::ElementDocument* fps_document = nullptr;
+    Rml::Element* fps_label = nullptr;
+    bool fps_visible = false;
+    std::chrono::steady_clock::time_point fps_sample{};
+    int fps_frames = 0;
+    goemon64::FpsCorner fps_corner = goemon64::FpsCorner::TopRight;
 public:
     bool mouse_is_active_initialized = false;
     bool mouse_is_active = false;
@@ -237,6 +243,45 @@ public:
         launcher_menu_controller->load_document();
         config_menu_controller->load_document();
         recompui::init_prompt_context();
+        fps_document = context->LoadDocument(goemon64::get_asset_path("fps_overlay.rml").string());
+        if (fps_document) {
+            fps_label = fps_document->GetElementById("fps");
+        }
+    }
+
+    bool update_fps_overlay(bool show) {
+        if (!fps_label) {
+            return false;
+        }
+        if (!show) {
+            if (fps_visible) {
+                fps_document->Hide();
+                fps_visible = false;
+            }
+            return false;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (!fps_visible) {
+            fps_document->Show(Rml::ModalFlag::None, Rml::FocusFlag::None);
+            fps_visible = true;
+            fps_sample = now;
+            fps_frames = 0;
+            fps_label->SetInnerRML("FPS");
+        }
+        const auto corner = goemon64::get_fps_corner();
+        if (corner != fps_corner) {
+            constexpr const char* classes[] = {"top-left", "top-right", "bottom-left", "bottom-right"};
+            fps_label->SetClassNames(classes[static_cast<int>(corner)]);
+            fps_corner = corner;
+        }
+        ++fps_frames;
+        const auto elapsed = std::chrono::duration<double>(now - fps_sample).count();
+        if (elapsed >= 0.5) {
+            fps_label->SetInnerRML(std::to_string(static_cast<int>(fps_frames / elapsed + 0.5)) + " FPS");
+            fps_sample = now;
+            fps_frames = 0;
+        }
+        return true;
     }
 
     void unload() {
@@ -562,6 +607,7 @@ void draw_hook(plume::RenderCommandList* command_list, plume::RenderFramebuffer*
     }
 
     std::lock_guard lock{ ui_state_mutex };
+    recompui::update_launcher();
 
     SDL_Event cur_event{};
 
@@ -751,7 +797,10 @@ void draw_hook(plume::RenderCommandList* command_list, plume::RenderFramebuffer*
     ui_state->update_primary_input(mouse_moved, non_mouse_interacted);
     ui_state->update_focus(mouse_moved, non_mouse_interacted);
 
-    if (recompui::is_any_context_shown()) {
+    const bool menu_visible = recompui::is_any_context_shown();
+    const bool fps_visible = ui_state->update_fps_overlay(
+        !menu_visible && ultramodern::is_game_started() && goemon64::get_show_fps());
+    if (menu_visible || fps_visible) {
         ui_state->update_contexts();
 
         int width = swap_chain_framebuffer->getWidth();

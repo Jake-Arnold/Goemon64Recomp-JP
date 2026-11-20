@@ -337,3 +337,7 @@ bool goemon_jp::logging::start_session(const char* version, const char* git_comm
         return false;
     }
 }
+
+void goemon_jp::logging::finish_session() noexcept {
+    stop_session();
+}
