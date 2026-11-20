@@ -922,6 +922,81 @@ def events(src: str) -> str:
     return "// Experimental integrated reset VI, message targets and action queue rearm.\n" + src
 
 
+AUDIO_CHECKPOINT = r"""
+static std::mutex jp_audio_state_mutex;
+static bool jp_audio_restore_armed = false;
+static std::optional<goemon_jp::savestate::AudioCheckpoint> jp_staged_audio;
+
+std::optional<goemon_jp::savestate::AudioCheckpoint> ultramodern::jp_snapshot_audio() {
+    std::unique_lock lock(jp_audio_state_mutex, std::try_to_lock);
+    if (!lock || !jp_audio_dispatch_idle_for_future_reset()) {
+        return std::nullopt;
+    }
+    return recomp::jp_capture_audio_output(sample_rate);
+}
+
+bool ultramodern::jp_rearm_audio_after_verified_exit() {
+    std::lock_guard lock(jp_audio_state_mutex);
+    if (!jp_audio_dispatch_idle_for_future_reset()) {
+        return false;
+    }
+    jp_audio_initialized.store(false, std::memory_order_release);
+    jp_audio_restore_armed = true;
+    return true;
+}
+
+bool ultramodern::jp_prepare_audio_restore(const goemon_jp::savestate::AudioCheckpoint& state) {
+    std::lock_guard lock(jp_audio_state_mutex);
+    if (!jp_audio_restore_armed || jp_staged_audio || !goemon_jp::savestate::valid_audio_checkpoint(state)) {
+        return false;
+    }
+    jp_staged_audio = state;
+    return true;
+}
+
+"""
+
+
+def audio(src: str) -> str:
+    if "jp_prepare_audio_restore" in src:
+        raise ValueError("Audio snapshot already installed")
+    src = once(src,
+        '#include "ultramodern/ultramodern.hpp"\n',
+        '#include "ultramodern/ultramodern.hpp"\n'
+        '#include "jp_audio_checkpoint.hpp"\n'
+        '#include <mutex>\n'
+        'namespace ultramodern { bool jp_rearm_audio_after_verified_exit(); }\n',
+        "native audio checkpoint types")
+    src = once(src,
+        "void ultramodern::set_audio_callbacks(",
+        AUDIO_CHECKPOINT + "void ultramodern::set_audio_callbacks(",
+        "record AI sample rate and output together")
+    src = once(src,
+        "    // Pick an initial dummy sample rate; this will be set by the game later to the true sample rate.\n"
+        "    set_audio_frequency(48000);\n",
+        "    std::lock_guard lock(jp_audio_state_mutex);\n"
+        "    if (jp_staged_audio) {\n"
+        "        if (!recomp::jp_restore_audio_output(*jp_staged_audio)) {\n"
+        "            throw std::runtime_error(\"Could not restore audio playback state\");\n"
+        "        }\n"
+        "        sample_rate = jp_staged_audio->sample_rate;\n"
+        "        jp_staged_audio.reset();\n"
+        "    } else {\n"
+        "        sample_rate = 48000;\n"
+        "        if (audio_callbacks.set_frequency) audio_callbacks.set_frequency(sample_rate);\n"
+        "    }\n"
+        "    jp_audio_restore_armed = false;\n",
+        "initialize restored audio before guest dispatch")
+    for entry in (
+        "void ultramodern::set_audio_frequency(uint32_t freq) {\n",
+        "void ultramodern::queue_audio_buffer(RDRAM_ARG PTR(int16_t) audio_data_, uint32_t byte_count) {\n",
+        "uint32_t ultramodern::get_remaining_audio_bytes() {\n",
+    ):
+        src = once(src, entry, entry + "    std::lock_guard lock(jp_audio_state_mutex);\n",
+            "serialize native audio callbacks with capture")
+    return "// Experimental integrated reset AI and playback checkpoint.\n" + src
+
+
 SAVE_REARM = r"""// A reset never discards dirty save bytes. Stage16 must have finalized
 // every previous mutation and joined the worker before this is called.
 bool ultramodern::jp_rearm_saving_after_verified_exit() {
@@ -1018,6 +1093,7 @@ def recomp(src: str) -> str:
         "    bool jp_rearm_timer_after_verified_exit(std::uint64_t);\n"
         "    bool jp_rearm_events_after_verified_exit(std::uint64_t);\n"
         "    bool jp_rearm_saving_after_verified_exit();\n"
+        "    bool jp_rearm_audio_after_verified_exit();\n"
         "    bool jp_clear_native_running_queue_after_verified_exit(bool);\n"
         "    bool jp_flush_external_messages_after_join(std::uint64_t);\n"
         "    bool jp_rearm_external_messages_after_verified_exit(std::uint64_t);\n"
@@ -1138,7 +1214,8 @@ def recomp(src: str) -> str:
         const bool save_ready = timer_ready &&
             ultramodern::jp_rearm_saving_after_verified_exit();
         const bool audio_ready = save_ready &&
-            recomp::jp_reset_audio_buffer_after_join();
+            recomp::jp_reset_audio_buffer_after_join() &&
+            ultramodern::jp_rearm_audio_after_verified_exit();
         const bool external_ready = audio_ready &&
             ultramodern::jp_rearm_external_messages_after_verified_exit(
                 old_generation);
@@ -1187,6 +1264,7 @@ def main() -> None:
         ("events.cpp", "events_integrated.cpp", events),
         ("timer_stage18.cpp", "timer_integrated.cpp", timer),
         ("pi_stage16.cpp", "pi_integrated.cpp", saving),
+        ("audio_stage7.cpp", "audio_integrated.cpp", audio),
         ("recomp_stage17.cpp", "recomp_integrated.cpp", recomp),
     ]
     for source, target, transform in changes:

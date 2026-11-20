@@ -61,6 +61,7 @@ namespace recomp { bool jp_request_integrated_reset(); }
 #endif
 #ifdef GOEMON_JP_NATIVE_F6_PAUSE_ACTIVE
 #include "jp_pause_controller.hpp"
+#include "jp_audio_checkpoint.hpp"
 #include "jp_timer_checkpoint.hpp"
 #include "jp_video_checkpoint.hpp"
 namespace ultramodern {
@@ -212,6 +213,12 @@ static void preview_save_state_action(bool save) {
                          video->presented_registers.VI_ORIGIN_REG, video->remaining_retraces);
         } else {
             std::fprintf(stderr, "[Native save-state preview] video_snapshot=unavailable\n");
+        }
+        if (const auto audio = ultramodern::jp_snapshot_audio()) {
+            std::fprintf(stderr, "[Native save-state preview] audio_snapshot=ready rate=%u buffered_samples=%zu\n",
+                         audio->sample_rate, audio->pending_output.size());
+        } else {
+            std::fprintf(stderr, "[Native save-state preview] audio_snapshot=unavailable\n");
         }
 #else
         std::fprintf(stderr, "[Native save-state preview] external_queue=%s\n", pending.c_str());

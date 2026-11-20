@@ -225,6 +225,7 @@ class IntegratedResetTests(unittest.TestCase):
             "events": runtime / "ultramodern/src/events.cpp",
             "timer": runtime / "ultramodern/src/timer.cpp",
             "saving": runtime / "librecomp/src/pi.cpp",
+            "audio": runtime / "ultramodern/src/audio.cpp",
             "recomp": runtime / "librecomp/src/recomp.cpp",
         }
         if not all(path.is_file() for path in inputs.values()):
@@ -259,6 +260,7 @@ class IntegratedResetTests(unittest.TestCase):
             "timer": stage18.instrument_stage17_timer(
                 stage17.instrument_timer(original["timer"])),
             "saving": stage16.instrument_pi(original["saving"]),
+            "audio": stage7.instrument_audio(original["audio"]),
             "recomp": stage17.instrument_recomp_after_stage12(
                 stage12.instrument_recomp_stage7(
                     stage7.instrument_recomp(original["recomp"]))),
@@ -271,6 +273,7 @@ class IntegratedResetTests(unittest.TestCase):
             "events": integrated.events,
             "timer": integrated.timer,
             "saving": integrated.saving,
+            "audio": integrated.audio,
             "recomp": integrated.recomp,
         }
         emit_root = os.environ.get("JP_INTEGRATED_EMIT_DIR")
@@ -282,6 +285,7 @@ class IntegratedResetTests(unittest.TestCase):
             "events": "events_integrated.cpp",
             "timer": "timer_integrated.cpp",
             "saving": "pi_integrated.cpp",
+            "audio": "audio_integrated.cpp",
             "recomp": "recomp_integrated.cpp",
         }
         composed = {}
@@ -298,7 +302,7 @@ class IntegratedResetTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "already"):
                     transform(result)
 
-        if all(key in composed for key in ("scheduler", "threads", "messages", "timer", "events")):
+        if all(key in composed for key in ("scheduler", "threads", "messages", "timer", "events", "audio")):
             scheduling = stage9.stage8.stage6.stage5.instrument_scheduler(
                 (runtime / "ultramodern/src/scheduling.cpp").read_text(encoding="utf-8"))
             pause = module("jp_pause_for_message_test", "patch_native_pause_resume.py")
@@ -308,6 +312,7 @@ class IntegratedResetTests(unittest.TestCase):
                 "mesgqueue.cpp": pause.messages(composed["messages"]),
                 "timer.cpp": pause.timer(composed["timer"]),
                 "events.cpp": pause.events(composed["events"]),
+                "audio.cpp": composed["audio"],
                 "scheduling.cpp": scheduling,
             })
 
@@ -395,6 +400,7 @@ RECOMP_FUNC void nested(uint8_t* rdram, recomp_context* ctx) {
                 *[f"-I{path}" for path in includes],
                 *[str(build / name) for name in sources],
                 str(fixture), str(fixture.with_name("test_video_checkpoint.cpp")),
+                str(fixture.with_name("test_audio_checkpoint.cpp")),
                 str(probe_tools / "message_checkpoint_bridge.cpp"),
                 str(probe_object), "-o", str(target),
             ], check=True, cwd=ROOT, timeout=60)

@@ -995,6 +995,7 @@ if(GOEMON_BUILD_JAPAN)
             "ultramodern|mesgqueue.cpp|mesgqueue_integrated.cpp"
             "ultramodern|events.cpp|events_integrated.cpp"
             "ultramodern|timer_stage18.cpp|timer_integrated.cpp"
+            "ultramodern|audio_stage7.cpp|audio_integrated.cpp"
             "librecomp|pi_stage16.cpp|pi_integrated.cpp"
             "librecomp|recomp_stage17.cpp|recomp_integrated.cpp")
             string(REPLACE "|" ";" JP_PAIR "${JP_TARGET_PAIR}")

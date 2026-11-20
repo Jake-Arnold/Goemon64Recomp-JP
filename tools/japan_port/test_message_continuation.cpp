@@ -460,6 +460,7 @@ static void test_timer_restore() {
 }
 
 void test_video_checkpoint();
+void test_audio_checkpoint();
 
 int main() {
     test_external_queue_admission();
@@ -478,4 +479,5 @@ int main() {
     test_idle_restore();
     test_timer_restore();
     test_video_checkpoint();
+    test_audio_checkpoint();
 }

@@ -50,6 +50,8 @@ At its pause boundary the timer worker publishes its active guest timer addresse
 
 The video snapshot keeps both VI buffers, mode addresses, retrace phase, the scanout and presented registers, and SP, DP, AI, and SI message targets. Cold startup rebinds guest modes to the restored RAM and queues the saved presentation before retraces resume. The runtime fixture checks that handoff with a test renderer. RT64's internal GPU and framebuffer data still need recovery work.
 
+The audio snapshot preserves the guest AI sample rate, resampler history, and unread SDL playback samples. It is available while the output device is paused and native audio callbacks are idle. Restore replaces the old SDL queue, initializes the saved conversion settings, and holds playback for the restore owner. SDL samples already sent to the operating system audio driver are outside this queue.
+
 A game-wide save state still needs a coordinator to hold those boundaries while capturing RAM, together with the device state owned by the workers and the renderer.
 
 ## Verified local build, 15 November 2026

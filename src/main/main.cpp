@@ -5,12 +5,17 @@
 #include <array>
 #include <filesystem>
 #include <numeric>
+#include <mutex>
 #include <stdexcept>
 #include <cinttypes>
 #include <cstring>
 #ifdef GOEMON_JP_SDL_AUDIO_STAGE15_ACTIVE
 #include <chrono>
 #include "../game/jp_generation_publisher_gate.hpp"
+#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+#include "../game/jp_audio_checkpoint.hpp"
+#include "../game/jp_sdl_audio_history.hpp"
+#endif
 #endif
 #ifdef GOEMON_JAPAN_NATIVE
 #include "goemon_japan_build_id.h"
@@ -318,13 +323,23 @@ static SDL_AudioDeviceID audio_device = 0;
 // Only normal app return may close it; F8 does not change this state.
 static goemon_jp::reset::PublisherGate jp_sdl_audio_gate{1};
 #endif
+#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+static std::mutex jp_audio_output_mutex;
+static goemon_jp::savestate::SdlAudioHistory jp_audio_history;
+#endif
+
 #ifdef GOEMON_JP_NATIVE_F6_PAUSE_ACTIVE
 namespace recomp {
 void jp_set_audio_paused(bool pause) {
     // Pause the existing SDL queue. Keep its bytes and device, so on
     // resume playback continues instead of losing an audio generation.
-    if (audio_device != 0) {
-        SDL_PauseAudioDevice(audio_device, pause ? 1 : 0);
+    {
+#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+        std::lock_guard lock(jp_audio_output_mutex);
+#endif
+        if (audio_device != 0) {
+            SDL_PauseAudioDevice(audio_device, pause ? 1 : 0);
+        }
     }
     // The window is deliberately NOT hidden/destroyed during guest pause.
     static std::string saved_title;
@@ -339,28 +354,6 @@ void jp_set_audio_paused(bool pause) {
             saved_title.clear();
         }
     }
-}
-} // namespace recomp
-#endif
-
-#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
-namespace recomp {
-bool jp_reset_audio_buffer_after_join() {
-    // The previous guest, native event workers and SDL audio dispatch have
-    // joined before this function runs. Keep the device and SDL window alive.
-    const auto state = jp_sdl_audio_gate.snapshot();
-    if (!state.open || state.in_flight != 0 || audio_device == 0) {
-        return false;
-    }
-    SDL_PauseAudioDevice(audio_device, 1);
-    SDL_ClearQueuedAudio(audio_device);
-    const bool cleared = SDL_GetQueuedAudioSize(audio_device) == 0;
-    SDL_PauseAudioDevice(audio_device, 0);
-    std::fprintf(stderr,
-        "[Goemon JP integrated reset] audio_reused=%u queue_cleared=%u.\n",
-        static_cast<unsigned>(audio_device != 0),
-        static_cast<unsigned>(cleared));
-    return cleared;
 }
 } // namespace recomp
 #endif
@@ -391,6 +384,73 @@ constexpr uint32_t duplicated_input_frames = 4;
 static uint32_t discarded_output_frames;
 
 constexpr uint32_t bytes_per_frame = input_channels * sizeof(float);
+static std::array<float, duplicated_input_frames * input_channels> duplicated_sample_buffer{};
+
+#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+namespace recomp {
+bool jp_reset_audio_buffer_after_join() {
+    // The previous guest, native event workers and SDL audio dispatch have
+    // joined before this function runs. Keep the device and SDL window alive.
+    std::lock_guard lock(jp_audio_output_mutex);
+    const auto state = jp_sdl_audio_gate.snapshot();
+    if (!state.open || state.in_flight != 0 || audio_device == 0) {
+        return false;
+    }
+    SDL_PauseAudioDevice(audio_device, 1);
+    const bool cleared = jp_audio_history.clear(audio_device);
+    duplicated_sample_buffer.fill(0.0f);
+    SDL_PauseAudioDevice(audio_device, 0);
+    std::fprintf(stderr,
+        "[Goemon JP integrated reset] audio_reused=%u queue_cleared=%u.\n",
+        static_cast<unsigned>(audio_device != 0),
+        static_cast<unsigned>(cleared));
+    return cleared;
+}
+} // namespace recomp
+#endif
+
+#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+namespace recomp {
+std::optional<goemon_jp::savestate::AudioCheckpoint> jp_capture_audio_output(uint32_t guest_rate) {
+    auto lease = jp_sdl_audio_gate.try_acquire();
+    std::unique_lock lock(jp_audio_output_mutex, std::try_to_lock);
+    if (!lease || !lock || audio_device == 0 || guest_rate != sample_rate) {
+        return std::nullopt;
+    }
+    auto pending = jp_audio_history.snapshot(audio_device);
+    if (!pending) {
+        return std::nullopt;
+    }
+    return goemon_jp::savestate::AudioCheckpoint{
+        sample_rate, output_sample_rate, duplicated_sample_buffer, std::move(*pending)};
+}
+
+bool jp_restore_audio_output(const goemon_jp::savestate::AudioCheckpoint& state) {
+    auto lease = jp_sdl_audio_gate.try_acquire();
+    std::lock_guard lock(jp_audio_output_mutex);
+    if (!lease || audio_device == 0 || !goemon_jp::savestate::valid_audio_checkpoint(state) ||
+            state.output_sample_rate != output_sample_rate) {
+        return false;
+    }
+    SDL_AudioCVT converter{};
+    if (SDL_BuildAudioCVT(&converter, AUDIO_F32, input_channels, state.sample_rate,
+                          AUDIO_F32, output_channels, output_sample_rate) < 0) {
+        return false;
+    }
+
+    SDL_PauseAudioDevice(audio_device, 1);
+    if (!jp_audio_history.restore(audio_device, state.pending_output)) {
+        return false;
+    }
+    audio_convert = converter;
+    sample_rate = state.sample_rate;
+    discarded_output_frames = duplicated_input_frames * output_sample_rate / sample_rate;
+    duplicated_sample_buffer = state.interpolation_tail;
+    // The restore owner resumes playback after the other devices and guests are ready.
+    return true;
+}
+} // namespace recomp
+#endif
 
 void queue_samples(int16_t* audio_data, size_t sample_count) {
 #ifdef GOEMON_JP_SDL_AUDIO_STAGE15_ACTIVE
@@ -398,10 +458,12 @@ void queue_samples(int16_t* audio_data, size_t sample_count) {
     auto jp_audio_lease = jp_sdl_audio_gate.try_acquire();
     if (!jp_audio_lease) return;
 #endif
+#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+    std::lock_guard lock(jp_audio_output_mutex);
+#endif
     // Buffer for holding the output of swapping the audio channels. This is reused across
     // calls to reduce runtime allocations.
     static std::vector<float> swap_buffer;
-    static std::array<float, duplicated_input_frames * input_channels> duplicated_sample_buffer;
 
     // Make sure the swap buffer is large enough to hold the audio data, including any extra space needed for resampling.
     size_t resampled_sample_count = sample_count + duplicated_input_frames * input_channels;
@@ -459,7 +521,13 @@ void queue_samples(int16_t* audio_data, size_t sample_count) {
 
     // Queue the swapped audio data.
     // Offset the data start by only half the discarded frame count as the other half of the discarded frames are at the end of the buffer.
+#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+    const auto samples_in_frame = output_channels;
+    const auto frames_to_queue = num_bytes_to_queue / (samples_in_frame * sizeof(float));
+    (void)jp_audio_history.enqueue(audio_device, {samples_to_queue, frames_to_queue * samples_in_frame});
+#else
     SDL_QueueAudio(audio_device, samples_to_queue, num_bytes_to_queue);
+#endif
 }
 
 size_t get_frames_remaining() {
@@ -467,6 +535,9 @@ size_t get_frames_remaining() {
     // SDL_GetQueuedAudioSize also needs to complete before device close.
     auto jp_audio_lease = jp_sdl_audio_gate.try_acquire();
     if (!jp_audio_lease) return 0;
+#endif
+#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+    std::lock_guard lock(jp_audio_output_mutex);
 #endif
     constexpr float buffer_offset_frames = 1.0f;
     // Get the number of remaining buffered audio bytes.
@@ -507,6 +578,9 @@ void set_frequency(uint32_t freq) {
     // Converter settings must not mutate after the SDL audio close barrier.
     auto jp_audio_lease = jp_sdl_audio_gate.try_acquire();
     if (!jp_audio_lease) return;
+#endif
+#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+    std::lock_guard lock(jp_audio_output_mutex);
 #endif
     sample_rate = freq;
 
