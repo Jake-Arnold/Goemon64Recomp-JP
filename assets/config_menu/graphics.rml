@@ -199,7 +199,7 @@
                                 data-checked="msaa_option"
                                 value="None"
                                 id="msaa_none"
-                                data-attr-style="rr_option=='Manual' ? 'nav-up: #rr_manual_input; nav-down: #hr_original' : 'nav-up: #rr_original; nav-down: #hr_original'"
+                                data-attr-style="rr_option=='Manual' ? 'nav-up: #rr_manual_input; nav-down: #fps_off' : 'nav-up: #rr_original; nav-down: #fps_off'"
                             />
                             <label class="config-option__tab-label" for="msaa_none">None</label>
                             <input type="radio"
@@ -210,7 +210,7 @@
                                 data-checked="msaa_option"
                                 value="MSAA2X"
                                 id="msaa_2x"
-                                data-attr-style="rr_option=='Manual' ? 'nav-up: #rr_manual_input; nav-down: #hr_16_9' : 'nav-up: #rr_display; nav-down: #hr_16_9'"
+                                data-attr-style="rr_option=='Manual' ? 'nav-up: #rr_manual_input; nav-down: #fps_on' : 'nav-up: #rr_display; nav-down: #fps_on'"
                                 data-style-nav-right="msaa4x_supported ? '#msaa_4x' : 'none'"
                             />
                             <label class="config-option__tab-label" for="msaa_2x">2x</label>
@@ -222,23 +222,54 @@
                                 data-checked="msaa_option"
                                 value="MSAA4X"
                                 id="msaa_4x"
-                                data-attr-style="rr_option=='Manual' ? 'nav-up: #rr_manual_input; nav-down: #hr_full' : 'nav-up: #rr_manual; nav-down: #hr_full'"
+                                data-attr-style="rr_option=='Manual' ? 'nav-up: #rr_manual_input; nav-down: #fps_on' : 'nav-up: #rr_manual; nav-down: #fps_on'"
                             />
                             <label class="config-option__tab-label" for="msaa_4x">4x</label>
                             <div class="config-option__details" data-if="!sample_positions_supported">Not available (missing sample positions support)</div>
                         </div>
                     </div>
-                    <div class="config-option">
+                    <div class="config-option" data-event-mouseover="set_cur_config_index(6)">
                         <label class="config-option__title">FPS Counter</label>
                         <div class="config-option__list">
-                            <input id="show_fps" type="checkbox" data-checked="show_fps"/>
-                            <label for="show_fps">Show FPS</label>
-                            <select id="fps_corner" data-value="fps_corner" data-attrif-disabled="!show_fps">
-                                <option value="0">Top left</option>
-                                <option value="1">Top right</option>
-                                <option value="2">Bottom left</option>
-                                <option value="3">Bottom right</option>
-                            </select>
+                            <input type="radio" name="fps_enabled" id="fps_off" value="Off" data-checked="fps_enabled"
+                                data-event-focus="set_cur_config_index(6)" data-event-blur="set_cur_config_index(-1)"
+                                style="nav-up: #msaa_none"
+                                data-style-nav-down="fps_enabled == 'On' ? '#fps_top_left' : (options_changed ? '#apply_button' : 'auto')"/>
+                            <label class="config-option__tab-label" for="fps_off">Off</label>
+                            <input type="radio" name="fps_enabled" id="fps_on" value="On" data-checked="fps_enabled"
+                                data-event-focus="set_cur_config_index(6)" data-event-blur="set_cur_config_index(-1)"
+                                data-style-nav-up="msaa2x_supported ? '#msaa_2x' : '#msaa_none'"
+                                data-style-nav-down="fps_enabled == 'On' ? '#fps_top_right' : (options_changed ? '#apply_button' : 'auto')"/>
+                            <label class="config-option__tab-label" for="fps_on">On</label>
+                        </div>
+                    </div>
+                    <div class="config-option" data-event-mouseover="set_cur_config_index(7)">
+                        <label class="config-option__title">FPS Position</label>
+                        <div class="config-option__list">
+                            <input type="radio" name="fps_corner" id="fps_top_left" value="0" data-checked="fps_corner"
+                                data-event-focus="set_cur_config_index(7)" data-event-blur="set_cur_config_index(-1)"
+                                data-attrif-disabled="fps_enabled == 'Off'"
+                                style="nav-up: #fps_on"
+                                data-style-nav-down="options_changed ? '#apply_button' : 'auto'"/>
+                            <label class="config-option__tab-label" for="fps_top_left">Top left</label>
+                            <input type="radio" name="fps_corner" id="fps_top_right" value="1" data-checked="fps_corner"
+                                data-event-focus="set_cur_config_index(7)" data-event-blur="set_cur_config_index(-1)"
+                                data-attrif-disabled="fps_enabled == 'Off'"
+                                style="nav-up: #fps_on"
+                                data-style-nav-down="options_changed ? '#apply_button' : 'auto'"/>
+                            <label class="config-option__tab-label" for="fps_top_right">Top right</label>
+                            <input type="radio" name="fps_corner" id="fps_bottom_left" value="2" data-checked="fps_corner"
+                                data-event-focus="set_cur_config_index(7)" data-event-blur="set_cur_config_index(-1)"
+                                data-attrif-disabled="fps_enabled == 'Off'"
+                                style="nav-up: #fps_on"
+                                data-style-nav-down="options_changed ? '#apply_button' : 'auto'"/>
+                            <label class="config-option__tab-label" for="fps_bottom_left">Bottom left</label>
+                            <input type="radio" name="fps_corner" id="fps_bottom_right" value="3" data-checked="fps_corner"
+                                data-event-focus="set_cur_config_index(7)" data-event-blur="set_cur_config_index(-1)"
+                                data-attrif-disabled="fps_enabled == 'Off'"
+                                style="nav-up: #fps_on"
+                                data-style-nav-down="options_changed ? '#apply_button' : 'auto'"/>
+                            <label class="config-option__tab-label" for="fps_bottom_right">Bottom right</label>
                         </div>
                     </div>
                 </div>
@@ -274,7 +305,10 @@
                         <b>Note: This option won't be available if your GPU does not support programmable MSAA sample positions, as it is currently required to avoid rendering glitches.</b>
                     </p>
                     <p data-if="cur_config_index == 6">
-                        Adjusts the placement of HUD elements to fit the selected aspect ratio. <b>Expand</b> will use the aspect ratio of the game's output window.
+                        Displays the rendered frame rate while playing.
+                    </p>
+                    <p data-if="cur_config_index == 7">
+                        Chooses the corner where the FPS counter appears.
                     </p>
                 </div>
             </div>
@@ -284,11 +318,11 @@
                 <div>
                     <button
                         class="button button--secondary"
-                        nav-return="rr_manual"
+                        nav-return="fps_on"
                         data-attrif-disabled="!options_changed"
                         onclick="apply_options"
                         id="apply_button"
-                        style="nav-up:#hr_original"
+                        data-style-nav-up="fps_enabled == 'On' ? '#fps_top_right' : '#fps_on'"
                     >
                         <div class="button__label">Apply<span class="prompt-font-sm">{{gfx_help__apply}}</span></div>
                     </button>

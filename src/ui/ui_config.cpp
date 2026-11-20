@@ -13,6 +13,20 @@
 #include "core/ui_context.h"
 
 ultramodern::renderer::GraphicsConfig new_options;
+static bool new_show_fps = false;
+static auto new_fps_corner = goemon64::FpsCorner::TopRight;
+
+static void reload_graphics_options() {
+    new_options = ultramodern::renderer::get_graphics_config();
+    new_show_fps = goemon64::get_show_fps();
+    new_fps_corner = goemon64::get_fps_corner();
+}
+
+static bool graphics_options_changed() {
+    return ultramodern::renderer::get_graphics_config() != new_options ||
+           goemon64::get_show_fps() != new_show_fps ||
+           goemon64::get_fps_corner() != new_fps_corner;
+}
 Rml::DataModelHandle nav_help_model_handle;
 Rml::DataModelHandle general_model_handle;
 Rml::DataModelHandle controls_model_handle;
@@ -172,8 +186,12 @@ void close_config_menu_impl() {
 extern SDL_Window* window;
 #endif
 
-void apply_graphics_config(void) {
+void apply_graphics_config(bool apply_fps = true) {
     ultramodern::renderer::set_graphics_config(new_options);
+    if (apply_fps) {
+        goemon64::set_show_fps(new_show_fps);
+        goemon64::set_fps_corner(new_fps_corner);
+    }
 #if defined(__linux__) // TODO: Remove once RT64 gets native fullscreen support on Linux
     if (new_options.wm_option == ultramodern::renderer::WindowMode::Fullscreen) {
         SDL_SetWindowFullscreen(window,SDL_WINDOW_FULLSCREEN_DESKTOP);
@@ -184,7 +202,7 @@ void apply_graphics_config(void) {
 }
 
 void close_config_menu() {
-    if (ultramodern::renderer::get_graphics_config() != new_options) {
+    if (graphics_options_changed()) {
         recompui::open_choice_prompt(
             "Graphics options have changed",
             "Would you like to apply or discard the changes?",
@@ -196,7 +214,7 @@ void close_config_menu() {
                 close_config_menu_impl();
             },
             []() {
-                new_options = ultramodern::renderer::get_graphics_config();
+                reload_graphics_options();
                 graphics_model_handle.DirtyAllVariables();
                 close_config_menu_impl();
             },
@@ -508,8 +526,9 @@ public:
     void register_events(recompui::UiEventListenerInstancer& listener) override {
         recompui::register_event(listener, "apply_options",
             [](const std::string& param, Rml::Event& event) {
-                graphics_model_handle.DirtyVariable("options_changed");
                 apply_graphics_config();
+                goemon64::save_config();
+                graphics_model_handle.DirtyVariable("options_changed");
             });
         recompui::register_event(listener, "config_keydown",
             [](const std::string& param, Rml::Event& event) {
@@ -606,7 +625,7 @@ public:
         }
 
         ultramodern::sleep_milliseconds(50);
-        new_options = ultramodern::renderer::get_graphics_config();
+        reload_graphics_options();
         bind_config_list_events(constructor);
 
         constructor.BindFunc("res_option",
@@ -619,13 +638,21 @@ public:
             }
         );
         bind_option(constructor, "wm_option", &new_options.wm_option);
-        constructor.BindFunc("show_fps",
-            [](Rml::Variant& out) { out = goemon64::get_show_fps(); },
-            [](const Rml::Variant& in) { goemon64::set_show_fps(in.Get<bool>()); });
-        constructor.BindFunc("fps_corner",
-            [](Rml::Variant& out) { out = static_cast<int>(goemon64::get_fps_corner()); },
+        constructor.BindFunc("fps_enabled",
+            [](Rml::Variant& out) { out = std::string(new_show_fps ? "On" : "Off"); },
             [](const Rml::Variant& in) {
-                goemon64::set_fps_corner(static_cast<goemon64::FpsCorner>(in.Get<int>()));
+                new_show_fps = in.Get<std::string>() == "On";
+                graphics_model_handle.DirtyVariable("fps_enabled");
+                graphics_model_handle.DirtyVariable("options_changed");
+            });
+        constructor.BindFunc("fps_corner",
+            [](Rml::Variant& out) { out = std::to_string(static_cast<int>(new_fps_corner)); },
+            [](const Rml::Variant& in) {
+                const auto choice = in.Get<std::string>();
+                if (choice.size() == 1 && choice[0] >= '0' && choice[0] <= '3') {
+                    new_fps_corner = static_cast<goemon64::FpsCorner>(choice[0] - '0');
+                    graphics_model_handle.DirtyVariable("options_changed");
+                }
             });
         bind_option(constructor, "ar_option", &new_options.ar_option);
         bind_option(constructor, "hr_option", &new_options.hr_option);
@@ -660,7 +687,7 @@ public:
 
         constructor.BindFunc("options_changed",
             [](Rml::Variant& out) {
-                out = (ultramodern::renderer::get_graphics_config() != new_options);
+                out = graphics_options_changed();
             });
         constructor.BindFunc("ds_info",
             [](Rml::Variant& out) {
@@ -1032,14 +1059,14 @@ void recompui::update_supported_options() {
     msaa8x_supported = goemon64::renderer::RT64MaxMSAA() >= RT64::UserConfiguration::Antialiasing::MSAA8X;
     sample_positions_supported = goemon64::renderer::RT64SamplePositionsSupported();
     
-    new_options = ultramodern::renderer::get_graphics_config();
+    reload_graphics_options();
 
     graphics_model_handle.DirtyAllVariables();
 }
 
 void recompui::toggle_fullscreen() {
     new_options.wm_option = (new_options.wm_option == ultramodern::renderer::WindowMode::Windowed) ? ultramodern::renderer::WindowMode::Fullscreen : ultramodern::renderer::WindowMode::Windowed;
-    apply_graphics_config();
+    apply_graphics_config(false);
     graphics_model_handle.DirtyVariable("wm_option");
 }
 
