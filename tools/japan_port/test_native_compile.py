@@ -1,6 +1,8 @@
 """ROM-free CMake smoke tests for isolated Japanese static-library build."""
+import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -70,6 +72,107 @@ class NativeCompileSmokeTests(unittest.TestCase):
         result = self.configure()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Incomplete Japanese N64Recomp C output', result.stdout + result.stderr)
+
+
+    def test_guest_checkpoint_restores_nested_frames_without_replaying_calls(self):
+        sdk = Path(os.environ.get(
+            'GOEMON_N64RECOMP_INCLUDE',
+            HERE.parents[2] / 'lib/N64ModernRuntime/N64Recomp/include',
+        ))
+        if not (sdk / 'recomp.h').is_file():
+            self.skipTest('Requires pinned N64Recomp recomp.h')
+        (self.generated / 'funcs.h').write_text(
+            'void synthetic_call(uint8_t* rdram, recomp_context* ctx);\n'
+        )
+        (self.generated / 'funcs_0.c').write_text("""RECOMP_FUNC void fixture(uint8_t* rdram, recomp_context* ctx) {
+    uint64_t hi = 0, lo = 0, result = 0;
+    int c1cs = 0;
+    TRACE_ENTRY()
+    hi = 17;
+    lo = 3;
+    result = 11;
+    c1cs = 5;
+    nested(rdram, ctx);
+    ctx->r4 = hi + lo + result + c1cs;
+    TRACE_RETURN()
+    return;
+;}
+RECOMP_FUNC void nested(uint8_t* rdram, recomp_context* ctx) {
+    uint64_t hi = 0, lo = 0, result = 0;
+    int c1cs = 0;
+    TRACE_ENTRY()
+    hi = 23;
+    synthetic_call(rdram, ctx);
+    if (ctx->r2 == 1) {
+        LOOKUP_FUNC(ctx->r3)(rdram, ctx);
+    }
+    ctx->r5 = hi;
+    TRACE_RETURN()
+    return;
+;}
+""")
+        probe = self.base / 'probe.c'
+        subprocess.run(
+            [sys.executable, str(HERE / 'generate_checkpoint_probe.py'),
+             '--generated', str(self.generated), '--function', 'fixture',
+             '--callee', 'nested', '--output', str(probe)],
+            check=True, timeout=10,
+        )
+        harness = self.base / 'harness.c'
+        harness.write_text("""#include "guest_checkpoint_probe.h"
+
+static unsigned lookup_count;
+
+void synthetic_call(uint8_t* rdram, recomp_context* ctx) {
+    ++rdram[0];
+    ctx->r2 = 1;
+    ctx->r3 = 0x100;
+    ctx->mips3_float_mode = 1;
+    ctx->f_odd = &ctx->f1.u32l;
+}
+
+recomp_func_t* get_function(int32_t addr) {
+    assert(addr == 0x100);
+    ++lookup_count;
+    return synthetic_call;
+}
+
+static bool capture(const goemon_jp_guest_checkpoint* state, void* user) {
+    *(goemon_jp_guest_checkpoint*)user = *state;
+    return true;
+}
+
+int main(void) {
+    uint8_t rdram[1] = {0};
+    recomp_context initial = {0};
+    recomp_context resumed = {0};
+    goemon_jp_guest_checkpoint saved;
+    assert(goemon_jp_guest_checkpoint_probe(rdram, &initial, NULL, capture, &saved)
+        == GOEMON_JP_CHECKPOINT_STOPPED);
+    assert(rdram[0] == 1 && lookup_count == 0 && saved.frame_count == 2);
+    assert(saved.frames[0].call_site == 1 && saved.frames[1].call_site == 1);
+    goemon_jp_guest_checkpoint invalid = saved;
+    invalid.frames[1].function_index = 0;
+    assert(goemon_jp_guest_checkpoint_probe(rdram, &resumed, &invalid, NULL, NULL)
+        == GOEMON_JP_CHECKPOINT_INVALID);
+    assert(resumed.r2 == 0 && rdram[0] == 1);
+    assert(goemon_jp_guest_checkpoint_probe(rdram, &resumed, &saved, capture, &saved)
+        == GOEMON_JP_CHECKPOINT_STOPPED);
+    assert(rdram[0] == 2 && lookup_count == 1 && saved.frame_count == 2);
+    assert(saved.frames[1].call_site == 2);
+    assert(goemon_jp_guest_checkpoint_probe(rdram, &resumed, &saved, NULL, NULL)
+        == GOEMON_JP_CHECKPOINT_FINISHED);
+    assert(rdram[0] == 2 && lookup_count == 1);
+    assert(resumed.r4 == 36 && resumed.r5 == 23 && resumed.f_odd == &resumed.f1.u32l);
+}
+""")
+        exe = self.base / 'checkpoint-test'
+        subprocess.run(
+            ['cc', '-std=gnu17', '-O2', '-I', str(sdk), '-I', str(HERE),
+             '-I', str(self.generated), str(probe), str(harness), '-lm', '-o', str(exe)],
+            check=True, timeout=30,
+        )
+        subprocess.run([str(exe)], check=True, timeout=5)
 
 
 if __name__ == '__main__':

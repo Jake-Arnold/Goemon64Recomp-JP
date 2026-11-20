@@ -12,6 +12,15 @@
 
 #include "core/ui_context.h"
 
+#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+namespace recomp {
+    bool jp_request_return_to_launcher();
+#ifdef GOEMON_JP_NATIVE_F6_PAUSE_ACTIVE
+    void jp_set_audio_paused(bool pause);
+#endif
+}
+#endif
+
 ultramodern::renderer::GraphicsConfig new_options;
 static bool new_show_fps = false;
 static auto new_fps_corner = goemon64::FpsCorner::TopRight;
@@ -230,6 +239,19 @@ void close_config_menu() {
 }
 
 void goemon64::open_quit_game_prompt() {
+    std::function<void()> return_to_menu;
+#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+    if (ultramodern::is_game_started()) {
+        return_to_menu = [] {
+            if (!recomp::jp_request_return_to_launcher()) {
+                return;
+            }
+#ifdef GOEMON_JP_NATIVE_F6_PAUSE_ACTIVE
+            recomp::jp_set_audio_paused(false);
+#endif
+        };
+    }
+#endif
     recompui::open_choice_prompt(
         "Are you sure you want to quit?",
         "Any progress since your last save will be lost.",
@@ -242,7 +264,9 @@ void goemon64::open_quit_game_prompt() {
         recompui::ButtonVariant::Error,
         recompui::ButtonVariant::Tertiary,
         true,
-        "config__quit-game-button"
+        "config__quit-game-button",
+        "Return to main menu",
+        std::move(return_to_menu)
     );
 }
 

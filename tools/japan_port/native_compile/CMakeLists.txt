@@ -61,5 +61,35 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
   )
 endif()
 
+set(GOEMON_JP_CHECKPOINT_PROBE_FUNCTION "" CACHE STRING "Generated JP root function for the call-return resume probe")
+set(GOEMON_JP_CHECKPOINT_PROBE_CALLEES "" CACHE STRING "Additional directly called generated JP functions to instrument")
+if(GOEMON_JP_CHECKPOINT_PROBE_FUNCTION)
+  set(probe_functions "${GOEMON_JP_CHECKPOINT_PROBE_FUNCTION}" ${GOEMON_JP_CHECKPOINT_PROBE_CALLEES})
+  foreach(func IN LISTS probe_functions)
+    if(NOT func MATCHES "^[A-Za-z_][A-Za-z0-9_]*$")
+      message(FATAL_ERROR "Invalid checkpoint probe function name: ${func}")
+    endif()
+  endforeach()
+  set(probe_callee_args "")
+  foreach(callee IN LISTS GOEMON_JP_CHECKPOINT_PROBE_CALLEES)
+    list(APPEND probe_callee_args --callee "${callee}")
+  endforeach()
+  string(SHA256 probe_id "${probe_functions}")
+  string(SUBSTRING "${probe_id}" 0 12 probe_id)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  set(probe_source "${CMAKE_CURRENT_BINARY_DIR}/guest_checkpoint_probe_${probe_id}.c")
+  add_custom_command(
+    OUTPUT "${probe_source}"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/generate_checkpoint_probe.py"
+      --generated "${GOEMON_JAPAN_GENERATED}"
+      --function "${GOEMON_JP_CHECKPOINT_PROBE_FUNCTION}" ${probe_callee_args}
+      --output "${probe_source}"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/generate_checkpoint_probe.py" ${generated_c}
+    VERBATIM
+  )
+  target_sources(GoemonRecompiledJapan PRIVATE "${probe_source}")
+  target_include_directories(GoemonRecompiledJapan PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+endif()
+
 message(STATUS "Japanese native C objects: ${source_count} translation units")
 message(STATUS "This static library alone is not a playable PC executable.")

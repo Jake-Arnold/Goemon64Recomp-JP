@@ -32,6 +32,12 @@ cmake --build build-generated/japan-native-lib \
 
 This compiles the local `funcs_*.c` and `lookup.cpp` into `libGoemonRecompiledJapan.a`. It does **not** compile or link `recomp_overlays.inl` into a PC runtime yet.
 
+## Probe a guest CPU checkpoint
+
+Add `-DGOEMON_JP_CHECKPOINT_PROBE_FUNCTION=func_80000450_1050` to the isolated CMake configuration to emit an experimental copy of that generated function. The original function stays registered with the runtime. A host harness can call the probe declared in `guest_checkpoint_probe.h` and copy a checkpoint after a call returns. It can then supply that checkpoint, a fresh CPU context, and the corresponding RDRAM contents to resume after the call.
+
+Use `GOEMON_JP_CHECKPOINT_PROBE_CALLEES` to name additional directly called functions as a CMake list. The probe can resume the innermost captured frame and unwind back through its instrumented callers. Checkpoints are in memory and tied to the selected generated bodies. Indirect calls run normally and only expose a point after they return. Functions with extra C locals, including jump-table temporaries, are rejected. Capturing a full game state still requires broader code generation coverage, continuations for suspended native calls, and a consistent snapshot across workers.
+
 ## Verified local build, 15 November 2026
 
 With the Japanese ROM SHA-1 `6f8745fecc3a5e7d4918c7a73353eb0726116ded`, the pinned x86-64 `N64Recomp` emitted 145 C source units. The isolated build passed CMake configuration, Clang 17 compilation and static archiving with **exit code 0** (33 MiB library, debug/unoptimised build).

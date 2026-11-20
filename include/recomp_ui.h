@@ -99,7 +99,9 @@ namespace recompui {
         ButtonVariant confirm_variant = ButtonVariant::Success,
         ButtonVariant cancel_variant = ButtonVariant::Error,
         bool focus_on_cancel = true,
-        const std::string& return_element_id = ""
+        const std::string& return_element_id = "",
+        std::string_view alternate_label = {},
+        std::function<void()> alternate_action = {}
     );
     void open_info_prompt(
         const std::string& header_text,

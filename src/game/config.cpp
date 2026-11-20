@@ -331,6 +331,8 @@ void assign_all_mappings(recomp::InputDevice device, const recomp::DefaultN64Map
 #ifdef GOEMON_JP_NATIVE_F6_PAUSE_ACTIVE
     assign_mapping_complete(device, recomp::GameInput::PAUSE_GAME, values.pause_game);
 #endif
+    assign_mapping_complete(device, recomp::GameInput::PREVIOUS_SAVE_SLOT, values.previous_save_slot);
+    assign_mapping_complete(device, recomp::GameInput::NEXT_SAVE_SLOT, values.next_save_slot);
 };
 
 void goemon64::reset_input_bindings() {

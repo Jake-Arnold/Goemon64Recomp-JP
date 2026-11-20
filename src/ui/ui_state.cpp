@@ -161,7 +161,10 @@ class UIState {
     std::unique_ptr<recompui::MenuController> launcher_menu_controller{};
     std::unique_ptr<recompui::MenuController> config_menu_controller{};
     std::vector<ContextDetails> shown_contexts{};
-    Rml::ElementDocument* fps_document = nullptr;
+    Rml::ElementDocument* hud_document = nullptr;
+    Rml::Element* save_slot_label = nullptr;
+    bool hud_visible = false;
+    int displayed_save_slot = 0;
     Rml::Element* fps_label = nullptr;
     bool fps_visible = false;
     std::chrono::steady_clock::time_point fps_sample{};
@@ -243,31 +246,51 @@ public:
         launcher_menu_controller->load_document();
         config_menu_controller->load_document();
         recompui::init_prompt_context();
-        fps_document = context->LoadDocument(goemon64::get_asset_path("fps_overlay.rml").string());
-        if (fps_document) {
-            fps_label = fps_document->GetElementById("fps");
+        hud_document = context->LoadDocument(goemon64::get_asset_path("gameplay_hud.rml").string());
+        if (hud_document) {
+            fps_label = hud_document->GetElementById("fps");
+            save_slot_label = hud_document->GetElementById("save-slot");
         }
     }
 
-    bool update_fps_overlay(bool show) {
-        if (!fps_label) {
+    bool update_gameplay_hud(bool show) {
+        if (!hud_document || !save_slot_label || !fps_label) {
             return false;
+        }
+        if (show != hud_visible) {
+            hud_visible = show;
+            if (show) {
+                hud_document->Show(Rml::ModalFlag::None, Rml::FocusFlag::None);
+            } else {
+                hud_document->Hide();
+            }
         }
         if (!show) {
-            if (fps_visible) {
-                fps_document->Hide();
-                fps_visible = false;
-            }
+            fps_sample = {};
             return false;
         }
-        const auto now = std::chrono::steady_clock::now();
-        if (!fps_visible) {
-            fps_document->Show(Rml::ModalFlag::None, Rml::FocusFlag::None);
-            fps_visible = true;
-            fps_sample = now;
+
+        const int slot = recomp::get_save_slot();
+        if (slot != displayed_save_slot) {
+            save_slot_label->SetInnerRML("Save slot " + std::to_string(slot));
+            displayed_save_slot = slot;
+        }
+        const bool show_fps = goemon64::get_show_fps();
+        if (show_fps != fps_visible || (show_fps && fps_sample == std::chrono::steady_clock::time_point{})) {
+            fps_label->SetProperty("display", show_fps ? "block" : "none");
+            fps_visible = show_fps;
+            fps_sample = std::chrono::steady_clock::now();
             fps_frames = 0;
             fps_label->SetInnerRML("FPS");
         }
+        if (show_fps) {
+            update_fps_counter();
+        }
+        return true;
+    }
+
+    void update_fps_counter() {
+        const auto now = std::chrono::steady_clock::now();
         const auto corner = goemon64::get_fps_corner();
         if (corner != fps_corner) {
             constexpr const char* classes[] = {"top-left", "top-right", "bottom-left", "bottom-right"};
@@ -281,7 +304,6 @@ public:
             fps_sample = now;
             fps_frames = 0;
         }
-        return true;
     }
 
     void unload() {
@@ -798,9 +820,9 @@ void draw_hook(plume::RenderCommandList* command_list, plume::RenderFramebuffer*
     ui_state->update_focus(mouse_moved, non_mouse_interacted);
 
     const bool menu_visible = recompui::is_any_context_shown();
-    const bool fps_visible = ui_state->update_fps_overlay(
-        !menu_visible && ultramodern::is_game_started() && goemon64::get_show_fps());
-    if (menu_visible || fps_visible) {
+    const bool hud_visible = ui_state->update_gameplay_hud(
+        !menu_visible && ultramodern::is_game_started());
+    if (menu_visible || hud_visible) {
         ui_state->update_contexts();
 
         int width = swap_chain_framebuffer->getWidth();

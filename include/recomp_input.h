@@ -58,7 +58,9 @@ namespace recomp {
         DEFINE_INPUT(ACCEPT_MENU, 0, "Accept (Menu)", "In the recomp interface, performs the action for the currently highlighted item. Like pressing a button, or toggling a switch.") \
         DEFINE_INPUT(APPLY_MENU, 0, "Apply (Menu)", "In the recomp interface, if changes are made to a configuration that requires applying your settings, this will apply the current changes.") \
         DEFINE_JP_RESET_INPUT() \
-        DEFINE_PAUSE_INPUT()
+        DEFINE_PAUSE_INPUT() \
+        DEFINE_INPUT(PREVIOUS_SAVE_SLOT, 0, "Previous Save Slot", "Select the previous save-state slot.") \
+        DEFINE_INPUT(NEXT_SAVE_SLOT, 0, "Next Save Slot", "Select the next save-state slot.")
 
     #define DEFINE_ALL_INPUTS() \
         DEFINE_N64_AXIS_INPUTS() \
@@ -140,6 +142,8 @@ namespace recomp {
 #ifdef GOEMON_JP_NATIVE_F6_PAUSE_ACTIVE
         std::vector<InputField> pause_game;
 #endif
+        std::vector<InputField> previous_save_slot;
+        std::vector<InputField> next_save_slot;
     };
 
     inline const std::vector<InputField>& get_default_mapping_for_input(const DefaultN64Mappings& defaults, const GameInput input) {
@@ -172,6 +176,8 @@ namespace recomp {
 #ifdef GOEMON_JP_NATIVE_F6_PAUSE_ACTIVE
             case GameInput::PAUSE_GAME: return defaults.pause_game;
 #endif
+            case GameInput::PREVIOUS_SAVE_SLOT: return defaults.previous_save_slot;
+            case GameInput::NEXT_SAVE_SLOT: return defaults.next_save_slot;
             default: return empty_input_field;
         }
     }
@@ -224,6 +230,7 @@ namespace recomp {
     BackgroundInputMode get_background_input_mode();
     void set_background_input_mode(BackgroundInputMode mode);
 
+    int get_save_slot();
     bool game_input_disabled();
     bool all_input_disabled();
 }

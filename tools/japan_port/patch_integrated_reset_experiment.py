@@ -129,6 +129,33 @@ def scheduler(src: str) -> str:
     return "// Experimental integrated reset persistent native scheduler queue.\n" + src
 
 
+GUEST_THREAD_BINDINGS = r"""// Keep native thread handles outside of the guest's OSThread record.
+static std::unordered_map<const OSThread*, UltraThreadContext*> jp_guest_thread_bindings;
+
+static bool is_bound_guest_thread(const OSThread* thread, const UltraThreadContext* context) {
+    std::lock_guard lock(jp_guest_context_mutex);
+    const auto binding = jp_guest_thread_bindings.find(thread);
+    return binding != jp_guest_thread_bindings.end() && binding->second == context;
+}
+
+static bool unbind_guest_thread(const OSThread* thread, const UltraThreadContext* context) {
+    std::lock_guard lock(jp_guest_context_mutex);
+    const auto binding = jp_guest_thread_bindings.find(thread);
+    if (binding == jp_guest_thread_bindings.end() || binding->second != context) {
+        return false;
+    }
+    jp_guest_thread_bindings.erase(binding);
+    return true;
+}
+
+static UltraThreadContext* current_guest_context(const OSThread* thread) {
+    std::lock_guard lock(jp_guest_context_mutex);
+    return jp_guest_thread_bindings.at(thread);
+}
+
+"""
+
+
 GUEST_REARM = r"""// After normal shutdown and a complete worker join, the reset owner may
 // reopen OSThread creation. Never clear the stop flag while any old guest
 // context remains live or its cleaner has not joined.
@@ -136,7 +163,7 @@ bool ultramodern::jp_rearm_guest_after_verified_exit() {
     std::lock_guard<std::mutex> lock(jp_guest_context_mutex);
     if (!jp_guest_stop_requested.load(std::memory_order_acquire) ||
         jp_guest_creations_in_flight.load(std::memory_order_acquire) != 0 ||
-        !jp_guest_contexts.empty() ||
+        !jp_guest_contexts.empty() || !jp_guest_thread_bindings.empty() ||
         jp_guest_threads_created.load(std::memory_order_acquire) !=
             jp_guest_threads_joined.load(std::memory_order_acquire)) {
         return false;
@@ -156,6 +183,70 @@ def threads(src: str) -> str:
         '#include "ultramodern/ultramodern.hpp"\n'
         'namespace ultramodern { bool jp_rearm_guest_after_verified_exit(); }\n',
         "guest rearm declaration before out-of-namespace definition")
+    src = once(src,
+        "#include <unordered_set>\n",
+        "#include <unordered_set>\n#include <unordered_map>\n",
+        "guest thread binding include")
+    registry_anchor = "static std::unordered_set<UltraThreadContext*> jp_guest_contexts;\n"
+    src = once(src, registry_anchor, registry_anchor + "\n" + GUEST_THREAD_BINDINGS,
+        "guest thread binding registry")
+    src = once(src,
+        "TO_PTR(OSThread, ultramodern::this_thread())->context != thread_context",
+        "!is_bound_guest_thread(TO_PTR(OSThread, ultramodern::this_thread()), thread_context)",
+        "check binding after scheduler wake")
+    src = once(src,
+        "    t->context->running.signal();\n",
+        "    std::lock_guard lock(jp_guest_context_mutex);\n"
+        "    jp_guest_thread_bindings.at(t)->running.signal();\n",
+        "signal a bound host thread")
+    src = once(src,
+        '    debug_printf("[Scheduling] Resuming execution of thread %d\\n", to_run->id);\n'
+        "    to_run->context->running.signal();\n",
+        "    resume_thread(to_run);\n",
+        "signal the next scheduled thread")
+    for schedule in ("run_next_thread(PASS_RDRAM1);", "resume_thread(t);"):
+        src = once(src,
+            "    UltraThreadContext* cur_context = TO_PTR(OSThread, thread_self)->context;\n"
+            f"    {schedule}\n",
+            "    UltraThreadContext* cur_context = current_guest_context(TO_PTR(OSThread, thread_self));\n"
+            f"    {schedule}\n",
+            "look up the running thread before yielding")
+    src = once(src,
+        "        self->context == thread_context) {\n",
+        "        is_bound_guest_thread(self, thread_context)) {\n",
+        "check binding before guest entry")
+    src = once(src,
+        "    if (self->context == thread_context) {\n"
+        "        self->context = nullptr;\n",
+        "    if (unbind_guest_thread(self, thread_context)) {\n",
+        "remove only the exiting host thread's binding")
+    src = once(src,
+        "        jp_guest_contexts.insert(context);\n"
+        "    }\n"
+        "    t->context = context;\n"
+        "    context->host_thread = std::thread{_thread_func, PASS_RDRAM t_, entrypoint, arg, t->context};\n",
+        "        jp_guest_contexts.insert(context);\n"
+        "        jp_guest_thread_bindings.insert_or_assign(t, context);\n"
+        "    }\n"
+        "    // Preserve the pinned runtime's OSThread layout in guest RAM.\n"
+        "    t->context = nullptr;\n"
+        "    context->host_thread = std::thread{_thread_func, PASS_RDRAM t_, entrypoint, arg, context};\n",
+        "bind new host threads outside guest RAM")
+    src = once(src,
+        "    UltraThreadContext* cur_context = t->context;\n"
+        "    if (cur_context != nullptr) {\n"
+        "        // Mark the target thread as destroyed and resume it. When it starts it'll check this and terminate itself instead of resuming.\n"
+        "        t->context = nullptr;\n"
+        "        cur_context->running.signal();\n"
+        "    }\n",
+        "    std::lock_guard lock(jp_guest_context_mutex);\n"
+        "    const auto binding = jp_guest_thread_bindings.find(t);\n"
+        "    if (binding != jp_guest_thread_bindings.end()) {\n"
+        "        UltraThreadContext* context = binding->second;\n"
+        "        jp_guest_thread_bindings.erase(binding);\n"
+        "        context->running.signal();\n"
+        "    }\n",
+        "unbind and wake a destroyed thread")
     src = once(src,
         "void ultramodern::request_guest_shutdown_for_future_reset() {\n",
         GUEST_REARM + "void ultramodern::request_guest_shutdown_for_future_reset() {\n",
@@ -300,25 +391,22 @@ RESET_OWNER = r"""// Experimental reset ownership: F8 requests are handled by th
 // normal-exit join path, then a new guest generation is created inside the
 // SAME recomp::start() invocation (without a new PID or SDL_Window).
 namespace recomp { bool jp_request_integrated_reset(); }
+namespace recomp { bool jp_request_return_to_launcher(); }
 static std::atomic_bool jp_integrated_restart_requested{false};
-static std::u8string jp_integrated_restart_game_id;
+static std::optional<std::u8string> jp_integrated_restart_game_id;
 static std::atomic_uint64_t jp_integrated_generation{1};
 static bool jp_integrated_autostart_next = false;
 
-bool recomp::jp_request_integrated_reset() {
-    bool expected = false;
-    if (!jp_integrated_restart_requested.compare_exchange_strong(
-            expected, true, std::memory_order_acq_rel)) {
-        return false;
-    }
+static bool jp_request_generation_restart(bool start_game_after_restart) {
     {
         std::lock_guard<std::mutex> lock(current_game_mutex);
-        if (game_status.load(std::memory_order_acquire) != GameStatus::Running ||
+        if (jp_integrated_restart_requested.load(std::memory_order_acquire) ||
+            game_status.load(std::memory_order_acquire) != GameStatus::Running ||
             !current_game.has_value()) {
-            jp_integrated_restart_requested.store(false, std::memory_order_release);
             return false;
         }
-        jp_integrated_restart_game_id = *current_game;
+        jp_integrated_restart_game_id = start_game_after_restart ? current_game : std::nullopt;
+        jp_integrated_restart_requested.store(true, std::memory_order_release);
     }
     std::fprintf(stderr,
         "[Goemon JP integrated reset] request=1 generation=%llu "
@@ -333,6 +421,14 @@ bool recomp::jp_request_integrated_reset() {
     exited.store(true, std::memory_order_release);
     game_status.notify_all();
     return true;
+}
+
+bool recomp::jp_request_integrated_reset() {
+    return jp_request_generation_restart(true);
+}
+
+bool recomp::jp_request_return_to_launcher() {
+    return jp_request_generation_restart(false);
 }
 
 """
@@ -397,7 +493,7 @@ def recomp(src: str) -> str:
         "    }, window_handle, rdram};\n"
         "    if (jp_integrated_autostart_next) {\n"
         "        jp_integrated_autostart_next = false;\n"
-        "        recomp::start_game(jp_integrated_restart_game_id);\n"
+        "        recomp::start_game(*jp_integrated_restart_game_id);\n"
         "    }\n",
         "replay registered JP game selection after new preinit starts")
     src = once(src,
@@ -486,13 +582,14 @@ def recomp(src: str) -> str:
         // consumed by the old gfx worker before its real thread join.
         game_status.store(GameStatus::None, std::memory_order_release);
         exited.store(false, std::memory_order_release);
-        jp_integrated_autostart_next = true;
+        jp_integrated_autostart_next = jp_integrated_restart_game_id.has_value();
         jp_integrated_generation.fetch_add(1, std::memory_order_acq_rel);
         jp_integrated_restart_requested.store(false, std::memory_order_release);
         std::fprintf(stderr,
             "[Goemon JP integrated reset] generation=%llu result=REARMED "
-            "pid=unchanged window=preserved next_boot=1.\n",
-            static_cast<unsigned long long>(old_generation + 1));
+            "pid=unchanged window=preserved next_boot=%u.\n",
+            static_cast<unsigned long long>(old_generation + 1),
+            static_cast<unsigned>(jp_integrated_autostart_next));
         continue;
     }
     break;

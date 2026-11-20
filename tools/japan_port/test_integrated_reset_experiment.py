@@ -35,15 +35,14 @@ class IntegratedResetTests(unittest.TestCase):
         # executable. This failed an actual Ubuntu configure (17 Nov).
         creation = self.cmake.index(
             "add_executable(Goemon64RecompiledJP ${JP_SOURCES})")
-        macro = self.cmake.index(
-            "target_compile_definitions(Goemon64RecompiledJP PRIVATE "
-            "GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE)")
-        self.assertGreater(macro, creation)
-        self.assertIn(
-            "if(GOEMON_JP_INTEGRATED_F8_RESET_EXPERIMENTAL)\n"
-            "        target_compile_definitions(Goemon64RecompiledJP PRIVATE "
-            "GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE)",
-            self.cmake)
+        frontend = self.cmake[creation:]
+        self.assertRegex(
+            frontend,
+            r"if\(GOEMON_JP_INTEGRATED_F8_RESET_EXPERIMENTAL\)\s+(?:#[^\n]*\s+)*"
+            r"foreach\(region_target Goemon64Recompiled Goemon64RecompiledJP\)\s+"
+            r"target_compile_definitions\(\$\{region_target\} PRIVATE\s+"
+            r"GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE\b",
+        )
 
     def test_both_regional_frontends_link_the_real_audio_bridge(self):
         self.assertIn("bool jp_reset_audio_buffer_after_join()", self.front)
@@ -119,12 +118,6 @@ class IntegratedResetTests(unittest.TestCase):
         original = pinned.read_text(encoding="utf-8")
         self.assertIn("find_it->second.has_compressed_code = false;", original)
         self.assertIn("if (find_it->second.has_compressed_code) {", original)
-        self.assertIn(
-            "restore JP decompression across repeated guest generations",
-            self.script)
-        self.assertIn("game_id == u8\"mnsg.jp\"", self.script)
-        self.assertIn("find_it->second.has_compressed_code = true;", self.script)
-
         import importlib.util
         path = ROOT / "tools/japan_port/patch_integrated_reset_experiment.py"
         spec = importlib.util.spec_from_file_location(

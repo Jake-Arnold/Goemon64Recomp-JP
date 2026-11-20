@@ -12,8 +12,10 @@ struct {
     recompui::Label* prompt_label;
     recompui::Element* prompt_controls;
     recompui::Button* confirm_button;
+    recompui::Button* alternate_button;
     recompui::Button* cancel_button;
     std::function<void()> confirm_action;
+    std::function<void()> alternate_action;
     std::function<void()> cancel_action;
     std::string return_element_id;
     std::mutex mutex;
@@ -47,6 +49,18 @@ void run_cancel_callback() {
 
     // TODO nav: focus on return_element_id
     // or just remove it as the usage of the prompt can change now
+}
+
+static void run_alternate_callback() {
+    std::function<void()> action;
+    {
+        std::lock_guard lock{ prompt_state.mutex };
+        action = std::move(prompt_state.alternate_action);
+    }
+    recompui::hide_context(prompt_state.ui_context);
+    if (action) {
+        action();
+    }
 }
 
 void recompui::init_prompt_context() {
@@ -134,6 +148,16 @@ void recompui::init_prompt_context() {
     confirm_focus_style->set_border_color(Color{ 69, 208, 67, 255 });
     confirm_focus_style->set_background_color(Color{ 69, 208, 67, 76 });
     confirm_focus_style->set_color(Color{ 242, 242, 242, 255 });
+
+    prompt_state.alternate_button = context.create_element<Button>(
+        prompt_state.prompt_controls, "", ButtonStyle::Primary);
+    prompt_state.alternate_button->set_display(Display::None);
+    prompt_state.alternate_button->set_margin_top(0);
+    prompt_state.alternate_button->set_margin_bottom(0);
+    prompt_state.alternate_button->set_margin_left(12, Unit::Dp);
+    prompt_state.alternate_button->set_margin_right(12, Unit::Dp);
+    prompt_state.alternate_button->set_text_align(TextAlign::Center);
+    prompt_state.alternate_button->add_pressed_callback(run_alternate_callback);
 
     prompt_state.cancel_button = context.create_element<Button>(prompt_state.prompt_controls, "", ButtonStyle::Primary);
     prompt_state.cancel_button->set_min_width(185.0f, Unit::Dp);
@@ -240,7 +264,9 @@ void recompui::open_choice_prompt(
     ButtonVariant confirm_variant,
     ButtonVariant cancel_variant,
     bool focus_on_cancel,
-    const std::string& return_element_id
+    const std::string& return_element_id,
+    std::string_view alternate_label,
+    std::function<void()> alternate_action
 ) {
     std::lock_guard lock{ prompt_state.mutex };
 
@@ -258,10 +284,14 @@ void recompui::open_choice_prompt(
     prompt_state.confirm_button->set_text(confirm_label_text);
     prompt_state.cancel_button->set_text(cancel_label_text);
     prompt_state.confirm_action = confirm_action;
+    prompt_state.alternate_button->set_display(alternate_action ? Display::Block : Display::None);
+    prompt_state.alternate_button->set_text(std::string(alternate_label));
+    prompt_state.alternate_action = std::move(alternate_action);
     prompt_state.cancel_action = cancel_action;
     prompt_state.return_element_id = return_element_id;
 
     style_button(prompt_state.confirm_button, confirm_variant);
+    style_button(prompt_state.alternate_button, ButtonVariant::Primary);
     style_button(prompt_state.cancel_button, cancel_variant);
 
     prompt_state.ui_context.close();
@@ -293,6 +323,8 @@ void recompui::open_info_prompt(
     prompt_state.prompt_label->set_text(content_text);
     prompt_state.prompt_controls->set_display(Display::Flex);
     prompt_state.confirm_button->set_display(Display::None);
+    prompt_state.alternate_button->set_display(Display::None);
+    prompt_state.alternate_action = {};
     prompt_state.cancel_button->set_display(Display::Block);
     prompt_state.cancel_button->set_text(okay_label_text);
     prompt_state.confirm_action = {};
@@ -327,6 +359,8 @@ void recompui::open_notification(
     prompt_state.prompt_label->set_text(content_text);
     prompt_state.prompt_controls->set_display(Display::None);
     prompt_state.confirm_button->set_display(Display::None);
+    prompt_state.alternate_button->set_display(Display::None);
+    prompt_state.alternate_action = {};
     prompt_state.cancel_button->set_display(Display::None);
     prompt_state.confirm_action = {};
     prompt_state.cancel_action = {};
