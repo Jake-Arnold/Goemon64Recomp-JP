@@ -129,6 +129,59 @@ def scheduler(src: str) -> str:
     return "// Experimental integrated reset persistent native scheduler queue.\n" + src
 
 
+def overlays(src: str) -> str:
+    if "clear_region_patches" in src:
+        raise ValueError("Regional overlay reset already installed")
+    src = once(src,
+        "static std::unordered_map<std::string, recomp_func_t*> base_exports{};\n",
+        "static std::unordered_map<std::string, recomp_func_t*> base_exports{};\n"
+        "static std::unordered_map<std::string, recomp_func_t*> patch_exports{};\n",
+        "keep native exports separate from edition-specific patches")
+    src = once(src,
+        "        base_exports.emplace(cur_export->name, it->second);\n",
+        "        patch_exports.emplace(cur_export->name, it->second);\n",
+        "register only patch exports in the edition's table")
+    src = once(src,
+        "    auto it = base_exports.find(export_name);\n"
+        "    if (it == base_exports.end()) {\n"
+        "        return nullptr;\n"
+        "    }\n"
+        "    return it->second;\n",
+        "    if (const auto it = base_exports.find(export_name); it != base_exports.end()) {\n"
+        "        return it->second;\n"
+        "    }\n"
+        "    const auto patch = patch_exports.find(export_name);\n"
+        "    return patch == patch_exports.end() ? nullptr : patch->second;\n",
+        "look up process exports and then regional patch exports")
+    src = once(src,
+        "void recomp::overlays::register_overlays(",
+        """// The unified launcher calls this only before publishing the new
+// game ID, after any previous generation's teardown has completed.
+namespace recomp::overlays { void clear_region_patches(); }
+void recomp::overlays::clear_region_patches() {
+    patch_code_sections = nullptr;
+    num_patch_code_sections = 0;
+    patch_data.clear();
+    patch_code_sections_by_rom.clear();
+    patch_exports.clear();
+    base_events.clear();
+    manual_patch_symbols_by_vram.clear();
+}
+
+void recomp::overlays::register_overlays(""",
+        "clear the old region before installing the selected patch set")
+    src = once(src,
+        "void recomp::overlays::init_overlays() {\n"
+        "    func_map.clear();\n",
+        "void recomp::overlays::init_overlays() {\n"
+        "    func_map.clear();\n"
+        "    loaded_sections.clear();\n"
+        "    code_sections_by_rom.clear();\n"
+        "    std::free(section_addresses);\n",
+        "discard dynamic overlays and address storage from the prior generation")
+    return "// Experimental integrated reset overlay and patch lifecycle.\n" + src
+
+
 GUEST_THREAD_BINDINGS = r"""// Keep native thread handles outside of the guest's OSThread record.
 static std::unordered_map<const OSThread*, UltraThreadContext*> jp_guest_thread_bindings;
 
@@ -515,6 +568,11 @@ def recomp(src: str) -> str:
         "        (!jp_integrated_restart_requested.load(std::memory_order_acquire) ||\n"
         "         jp_exit_known_joined) && jp_native_scheduler_queue_cleared &&\n"
         "        jp_external_queue_drained) {\n"
+        "    if (jp_integrated_restart_requested.load(std::memory_order_acquire)) {\n"
+        "        // Unpatch modded functions while the old region's metadata is still valid.\n"
+        "        std::lock_guard lock(mod_context_mutex);\n"
+        "        if (mod_context != nullptr) mod_context->unload_mods();\n"
+        "    }\n"
         "    // Free rdram.\n",
         "never release RDRAM on failed integrated shutdown barrier")
 
@@ -606,6 +664,7 @@ def main() -> None:
     d = a.generated_dir
     changes = [
         ("threadqueue.cpp", "threadqueue_integrated.cpp", scheduler),
+        ("overlays.cpp", "overlays_integrated.cpp", overlays),
         ("threads.cpp", "threads_reset.cpp", threads),
         ("mesgqueue.cpp", "mesgqueue_integrated.cpp", messages),
         ("events.cpp", "events_integrated.cpp", events),
@@ -614,7 +673,12 @@ def main() -> None:
         ("recomp_stage17.cpp", "recomp_integrated.cpp", recomp),
     ]
     for source, target, transform in changes:
-        path = (a.runtime_root / "ultramodern/src/threadqueue.cpp") if source == "threadqueue.cpp" else d / source
+        if source == "threadqueue.cpp":
+            path = a.runtime_root / "ultramodern/src" / source
+        elif source == "overlays.cpp":
+            path = a.runtime_root / "librecomp/src" / source
+        else:
+            path = d / source
         original = path.read_text(encoding="utf-8")
         result = transform(original)
         output = d / target

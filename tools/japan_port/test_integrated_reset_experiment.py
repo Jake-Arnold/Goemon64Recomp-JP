@@ -53,7 +53,7 @@ class IntegratedResetTests(unittest.TestCase):
             self.cmake)
         self.assertNotIn("jp_integrated_audio_unavailable_usa.cpp", self.cmake)
 
-    def test_seven_generated_runtime_owners_together(self):
+    def test_generated_runtime_owners_together(self):
         for name in ("threads_reset.cpp", "threadqueue_integrated.cpp", "mesgqueue_integrated.cpp", "events_integrated.cpp",
                      "timer_integrated.cpp", "pi_integrated.cpp",
                      "recomp_integrated.cpp"):
@@ -193,7 +193,7 @@ class IntegratedResetTests(unittest.TestCase):
         files = [GEN / name for name in
                  ("threads_reset.cpp","mesgqueue_integrated.cpp","events_integrated.cpp",
                   "timer_integrated.cpp","pi_integrated.cpp",
-                  "recomp_integrated.cpp", "threadqueue_integrated.cpp")]
+                  "recomp_integrated.cpp", "threadqueue_integrated.cpp", "overlays_integrated.cpp")]
         if not all(f.exists() for f in files):
             self.skipTest("Run integrated reset CMake configure to generate runtime sources")
         texts = [f.read_text() for f in files]
@@ -209,6 +209,9 @@ class IntegratedResetTests(unittest.TestCase):
         self.assertIn("for (;;) {", texts[5])
         self.assertIn("jp_native_scheduler_queue_cleared", texts[5])
         self.assertIn("jp_clear_native_running_queue_after_verified_exit", texts[6])
+        self.assertIn("clear_region_patches()", texts[7])
+        self.assertIn("manual_patch_symbols_by_vram.clear();", texts[7])
+        self.assertIn("mod_context->unload_mods();", texts[5])
 
     def test_actual_pinned_runtime_generator_composition(self):
         # Exercise all six generated overlays from the actual pinned
@@ -216,6 +219,7 @@ class IntegratedResetTests(unittest.TestCase):
         runtime = ROOT / "lib/N64ModernRuntime"
         inputs = {
             "scheduler": runtime / "ultramodern/src/threadqueue.cpp",
+            "overlays": runtime / "librecomp/src/overlays.cpp",
             "threads": runtime / "ultramodern/src/threads.cpp",
             "messages": runtime / "ultramodern/src/mesgqueue.cpp",
             "events": runtime / "ultramodern/src/events.cpp",
@@ -248,6 +252,7 @@ class IntegratedResetTests(unittest.TestCase):
                     for key, path in inputs.items()}
         generated = {
             "scheduler": original["scheduler"],
+            "overlays": original["overlays"],
             "threads": stage9.instrument_threads(original["threads"]),
             "messages": stage9.stage8.stage6.stage5.stage4.instrument_messages(original["messages"]),
             "events": stage14.instrument_events(original["events"]),
@@ -260,6 +265,7 @@ class IntegratedResetTests(unittest.TestCase):
         }
         methods = {
             "scheduler": integrated.scheduler,
+            "overlays": integrated.overlays,
             "threads": integrated.threads,
             "messages": integrated.messages,
             "events": integrated.events,
@@ -270,6 +276,7 @@ class IntegratedResetTests(unittest.TestCase):
         emit_root = os.environ.get("JP_INTEGRATED_EMIT_DIR")
         outputs = {
             "scheduler": "threadqueue_integrated.cpp",
+            "overlays": "overlays_integrated.cpp",
             "threads": "threads_reset.cpp",
             "messages": "mesgqueue_integrated.cpp",
             "events": "events_integrated.cpp",

@@ -613,6 +613,8 @@ std::vector<recomp::GameEntry> supported_games = {
 
 
 #ifdef GOEMON_UNIFIED_REGIONS
+namespace recomp::overlays { void clear_region_patches(); }
+
 bool goemon64::launcher::start_unified_game(bool japan) {
     if (ultramodern::is_game_started()) {
         return false;
@@ -633,6 +635,7 @@ bool goemon64::launcher::start_unified_game(bool japan) {
 
     // No guest has started yet. Install one matching code/patch table before
     // publishing the game ID that lets the waiting guest boot.
+    recomp::overlays::clear_region_patches();
     if (japan) {
         goemon64::register_overlays();
         goemon64::register_patches();
