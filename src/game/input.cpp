@@ -1,6 +1,7 @@
 #include <atomic>
 #include <cstdio>
 #include <mutex>
+#include <utility>
 
 #include "ultramodern/ultramodern.hpp"
 #include "recomp.h"
@@ -53,6 +54,7 @@ namespace ultramodern { void jp_report_timer_producer_stage17(); }
 namespace ultramodern { void jp_report_timer_epoch_stage18(); }
 #endif
 #ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+#include "jp_guest_checkpoint_status.hpp"
 namespace recomp { bool jp_request_integrated_reset(); }
 #endif
 #ifdef GOEMON_JP_NATIVE_F6_PAUSE_ACTIVE
@@ -163,19 +165,60 @@ int recomp::get_save_slot() {
     return save_slot.load() + 1;
 }
 
-static bool handle_save_slot_binding(recomp::InputDevice device, InputType type, int32_t button) {
+static std::mutex save_state_status_mutex;
+static std::string pending_save_state_status;
+
+std::string recomp::take_save_state_status() {
+    std::lock_guard lock(save_state_status_mutex);
+    return std::exchange(pending_save_state_status, {});
+}
+
+#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+static void preview_save_state_action(bool save) {
+    std::string status = save ? "Save unavailable" : "Load unavailable";
+    if (save) {
+        const auto coverage = ultramodern::jp_guest_checkpoint_coverage();
+        const auto ready = coverage.not_started + coverage.message_checkpoints;
+        if (ready < coverage.threads) {
+            status += " (" + std::to_string(ready) + "/" + std::to_string(coverage.threads) +
+                " guest threads covered)";
+        } else {
+            status += " (runtime snapshot incomplete)";
+        }
+        std::fprintf(stderr, "[Native save-state preview] slot=%d %s; waiting=%u unstarted=%u\n",
+                     recomp::get_save_slot(), status.c_str(), coverage.message_checkpoints, coverage.not_started);
+    } else {
+        status += " (native restore incomplete)";
+        std::fprintf(stderr, "[Native save-state preview] slot=%d %s\n", recomp::get_save_slot(), status.c_str());
+    }
+    std::lock_guard lock(save_state_status_mutex);
+    pending_save_state_status = std::move(status);
+}
+#endif
+
+static bool handle_save_state_binding(recomp::InputDevice device, InputType type, int32_t button) {
     if (!ultramodern::is_game_started() || recomp::all_input_disabled() || recomp::game_input_disabled()) {
         return false;
     }
 
-    constexpr std::pair<recomp::GameInput, int> directions[] = {
+    constexpr std::pair<recomp::GameInput, int> actions[] = {
         { recomp::GameInput::PREVIOUS_SAVE_SLOT, -1 },
         { recomp::GameInput::NEXT_SAVE_SLOT, 1 },
+#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+        { recomp::GameInput::SAVE_STATE, 0 },
+        { recomp::GameInput::LOAD_STATE, 0 },
+#endif
     };
-    for (auto [action, direction] : directions) {
+    for (auto [action, direction] : actions) {
         for (size_t slot = 0; slot < recomp::bindings_per_input; ++slot) {
             const auto binding = recomp::get_input_binding(action, slot, device);
             if (binding == recomp::InputField{static_cast<uint32_t>(type), button}) {
+#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+                if (direction == 0) {
+                    preview_save_state_action(action == recomp::GameInput::SAVE_STATE);
+                    return true;
+                }
+#endif
                 int current = save_slot.load();
                 while (!save_slot.compare_exchange_weak(
                     current, (current + direction + save_slot_count) % save_slot_count)) {}
@@ -236,7 +279,7 @@ bool sdl_event_filter(void* userdata, SDL_Event* event) {
             }
 #endif
             if (!keyevent->repeat &&
-                handle_save_slot_binding(recomp::InputDevice::Keyboard, InputType::Keyboard,
+                handle_save_state_binding(recomp::InputDevice::Keyboard, InputType::Keyboard,
                                          keyevent->keysym.scancode)) {
                 return false;
             }
@@ -313,7 +356,7 @@ bool sdl_event_filter(void* userdata, SDL_Event* event) {
             return false;
         }
 #endif
-        if (handle_save_slot_binding(recomp::InputDevice::Controller, InputType::ControllerDigital,
+        if (handle_save_state_binding(recomp::InputDevice::Controller, InputType::ControllerDigital,
                                      event->cbutton.button)) {
             return false;
         }
@@ -349,6 +392,12 @@ bool sdl_event_filter(void* userdata, SDL_Event* event) {
 #ifdef GOEMON_JP_NATIVE_F6_PAUSE_ACTIVE
             // A host pause binding must be a key or a controller button.
             if (scanned_input_index == static_cast<int>(recomp::GameInput::PAUSE_GAME)) {
+                break;
+            }
+#endif
+#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+            if (scanned_input_index == static_cast<int>(recomp::GameInput::SAVE_STATE) ||
+                scanned_input_index == static_cast<int>(recomp::GameInput::LOAD_STATE)) {
                 break;
             }
 #endif
@@ -562,6 +611,14 @@ const recomp::DefaultN64Mappings recomp::default_n64_keyboard_mappings = {
     .next_save_slot = {
         {.input_type = static_cast<uint32_t>(InputType::Keyboard), .input_id = SDL_SCANCODE_F10}
     },
+#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+    .save_state = {
+        {.input_type = static_cast<uint32_t>(InputType::Keyboard), .input_id = SDL_SCANCODE_F5}
+    },
+    .load_state = {
+        {.input_type = static_cast<uint32_t>(InputType::Keyboard), .input_id = SDL_SCANCODE_F7}
+    },
+#endif
 };
 
 const recomp::DefaultN64Mappings recomp::default_n64_controller_mappings = {
@@ -641,6 +698,10 @@ const recomp::DefaultN64Mappings recomp::default_n64_controller_mappings = {
 #endif
     .previous_save_slot = {},
     .next_save_slot = {},
+#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+    .save_state = {},
+    .load_state = {},
+#endif
 };
 
 void recomp::poll_inputs() {
@@ -671,25 +732,6 @@ void recomp::poll_inputs() {
         InputState.pending_mouse_delta = { 0.0f, 0.0f };
     }
     
-    // Quicksaving is disabled for now and will likely have more limited functionality
-    // when restored, rather than allowing saving and loading at any point in time.
-    #if 0
-    if (InputState.keys) {
-        static bool save_was_held = false;
-        static bool load_was_held = false;
-        bool save_is_held = InputState.keys[SDL_SCANCODE_F5] != 0;
-        bool load_is_held = InputState.keys[SDL_SCANCODE_F7] != 0;
-        if (save_is_held && !save_was_held) {
-            goemon64::quicksave_save();
-        }
-        else if (load_is_held && !load_was_held) {
-            goemon64::quicksave_load();
-        }
-        save_was_held = save_is_held;
-    }
-    #endif
-
-
 #if defined(GOEMON_JAPAN_NATIVE) || defined(GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE)
     // Input plumbing only: the pinned runtime cannot safely reboot its
     // guest OSThreads and RDRAM yet. Do not exit or restart the process.

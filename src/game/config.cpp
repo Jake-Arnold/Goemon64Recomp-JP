@@ -333,6 +333,10 @@ void assign_all_mappings(recomp::InputDevice device, const recomp::DefaultN64Map
 #endif
     assign_mapping_complete(device, recomp::GameInput::PREVIOUS_SAVE_SLOT, values.previous_save_slot);
     assign_mapping_complete(device, recomp::GameInput::NEXT_SAVE_SLOT, values.next_save_slot);
+#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+    assign_mapping_complete(device, recomp::GameInput::SAVE_STATE, values.save_state);
+    assign_mapping_complete(device, recomp::GameInput::LOAD_STATE, values.load_state);
+#endif
 };
 
 void goemon64::reset_input_bindings() {

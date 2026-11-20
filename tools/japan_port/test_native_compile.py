@@ -169,6 +169,7 @@ int main(void) {
         exe = self.base / 'checkpoint-test'
         subprocess.run(
             ['cc', '-std=gnu17', '-O2', '-I', str(sdk), '-I', str(HERE),
+             '-I', str(HERE.parents[2] / 'src/game'),
              '-I', str(self.generated), str(probe), str(harness), '-lm', '-o', str(exe)],
             check=True, timeout=30,
         )

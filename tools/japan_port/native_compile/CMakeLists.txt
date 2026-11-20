@@ -63,6 +63,11 @@ endif()
 
 set(GOEMON_JP_CHECKPOINT_PROBE_FUNCTION "" CACHE STRING "Generated JP root function for the call-return resume probe")
 set(GOEMON_JP_CHECKPOINT_PROBE_CALLEES "" CACHE STRING "Additional directly called generated JP functions to instrument")
+set(GOEMON_JP_CHECKPOINT_INSTRUMENT_ROOT_UNIT "" CACHE STRING "Private funcs_*.c unit whose root should run through the live probe")
+option(GOEMON_JP_CHECKPOINT_PROBE_MESSAGES "Connect the probe to integrated guest message waits" OFF)
+if(GOEMON_JP_CHECKPOINT_PROBE_MESSAGES AND NOT GOEMON_JP_CHECKPOINT_PROBE_FUNCTION)
+  message(FATAL_ERROR "Message checkpoint probes require GOEMON_JP_CHECKPOINT_PROBE_FUNCTION")
+endif()
 if(GOEMON_JP_CHECKPOINT_PROBE_FUNCTION)
   set(probe_functions "${GOEMON_JP_CHECKPOINT_PROBE_FUNCTION}" ${GOEMON_JP_CHECKPOINT_PROBE_CALLEES})
   foreach(func IN LISTS probe_functions)
@@ -74,7 +79,20 @@ if(GOEMON_JP_CHECKPOINT_PROBE_FUNCTION)
   foreach(callee IN LISTS GOEMON_JP_CHECKPOINT_PROBE_CALLEES)
     list(APPEND probe_callee_args --callee "${callee}")
   endforeach()
-  string(SHA256 probe_id "${probe_functions}")
+  set(probe_message_args "")
+  if(GOEMON_JP_CHECKPOINT_PROBE_MESSAGES)
+    list(APPEND probe_message_args --message-continuations)
+    target_sources(GoemonRecompiledJapan PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/message_checkpoint_bridge.cpp")
+  endif()
+  if(GOEMON_JP_CHECKPOINT_INSTRUMENT_ROOT_UNIT)
+    set(original_root "${GOEMON_JAPAN_GENERATED}/${GOEMON_JP_CHECKPOINT_INSTRUMENT_ROOT_UNIT}")
+    if(NOT original_root IN_LIST generated_c OR NOT GOEMON_JP_CHECKPOINT_PROBE_MESSAGES)
+      message(FATAL_ERROR "Live checkpoint instrumentation requires a funcs_*.c unit and message support")
+    endif()
+    list(APPEND probe_message_args --instrument-root-source "${original_root}")
+    set_source_files_properties("${original_root}" PROPERTIES HEADER_FILE_ONLY ON)
+  endif()
+  string(SHA256 probe_id "${probe_functions};${GOEMON_JP_CHECKPOINT_PROBE_MESSAGES};${GOEMON_JP_CHECKPOINT_INSTRUMENT_ROOT_UNIT}")
   string(SUBSTRING "${probe_id}" 0 12 probe_id)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   set(probe_source "${CMAKE_CURRENT_BINARY_DIR}/guest_checkpoint_probe_${probe_id}.c")
@@ -82,13 +100,14 @@ if(GOEMON_JP_CHECKPOINT_PROBE_FUNCTION)
     OUTPUT "${probe_source}"
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/generate_checkpoint_probe.py"
       --generated "${GOEMON_JAPAN_GENERATED}"
-      --function "${GOEMON_JP_CHECKPOINT_PROBE_FUNCTION}" ${probe_callee_args}
+      --function "${GOEMON_JP_CHECKPOINT_PROBE_FUNCTION}" ${probe_callee_args} ${probe_message_args}
       --output "${probe_source}"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/generate_checkpoint_probe.py" ${generated_c}
     VERBATIM
   )
   target_sources(GoemonRecompiledJapan PRIVATE "${probe_source}")
-  target_include_directories(GoemonRecompiledJapan PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_include_directories(GoemonRecompiledJapan PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/game")
 endif()
 
 message(STATUS "Japanese native C objects: ${source_count} translation units")

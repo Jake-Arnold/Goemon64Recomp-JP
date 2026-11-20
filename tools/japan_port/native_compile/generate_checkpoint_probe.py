@@ -14,6 +14,11 @@ EXTRA_LOCAL = re.compile(
     r"(?:(?:unsigned|signed|const|static)\s+)*"
     r"(?:gpr|fpr|u?int\w*|float|double|bool|size_t|char|long|short|struct)\s+"
 )
+MESSAGE_CALLS = {
+    "osSendMesg_recomp": "GOEMON_JP_MESSAGE_SEND",
+    "osJamMesg_recomp": "GOEMON_JP_MESSAGE_JAM",
+    "osRecvMesg_recomp": "GOEMON_JP_MESSAGE_RECEIVE",
+}
 PROBE_HEADER = '''#include "guest_checkpoint_probe.h"
 #include "funcs.h"
 #include <stddef.h>
@@ -65,7 +70,8 @@ typedef goemon_jp_checkpoint_result probe_function(
 '''
 
 
-def emit_function(name: str, body: list[str], functions: dict[str, int]) -> tuple[str, list[int]]:
+def emit_function(name: str, body: list[str], functions: dict[str, int],
+                  message_continuations: bool) -> tuple[str, list[tuple[int, str]]]:
     if "\n".join(body[:2]) != LOCALS:
         raise ValueError(f"{name}: expected the pinned N64Recomp local declarations")
     emitted = []
@@ -89,7 +95,8 @@ def emit_function(name: str, body: list[str], functions: dict[str, int]) -> tupl
 
         callee = statement.split("(", 1)[0]
         callee_index = functions.get(callee, -1)
-        callees.append(callee_index)
+        message = MESSAGE_CALLS.get(callee) if message_continuations and callee_index < 0 else None
+        callees.append((callee_index, message or "GOEMON_JP_MESSAGE_NONE"))
         site = len(callees)
         emitted.extend((
             f"    *frame = (goemon_jp_guest_frame){{.function_index = {functions[name]}, .call_site = {site},",
@@ -101,6 +108,11 @@ def emit_function(name: str, body: list[str], functions: dict[str, int]) -> tupl
                 f"        goemon_jp_checkpoint_result child = probe_{callee}(rdram, ctx, execution, NULL);",
                 "        if (child != GOEMON_JP_CHECKPOINT_FINISHED) return child;",
                 "    }",
+            ))
+        elif message:
+            emitted.extend((
+                "    capture_cpu(&execution->state, ctx);",
+                f"    goemon_jp_probe_message_call(rdram, ctx, &execution->state, {callee});",
             ))
         else:
             emitted.append(line)
@@ -146,9 +158,9 @@ goemon_finished:
 """, callees
 
 
-def generate(bodies: dict[str, list[str]]) -> str:
+def generate(bodies: dict[str, list[str]], *, message_continuations: bool = False) -> str:
     functions = {name: index for index, name in enumerate(bodies)}
-    revision_input = "goemon-jp-checkpoint-v2\n" + "\n".join(
+    revision_input = f"goemon-jp-checkpoint-v3:{message_continuations}\n" + "\n".join(
         name + "\n" + "\n".join(body) for name, body in bodies.items()
     )
     revision = hashlib.sha256(revision_input.encode()).hexdigest()[:16]
@@ -158,23 +170,52 @@ def generate(bodies: dict[str, list[str]]) -> str:
     site_tables = []
     entries = []
     for name, body in bodies.items():
-        definition, sites = emit_function(name, body, functions)
+        definition, sites = emit_function(name, body, functions, message_continuations)
         definitions.append(definition)
-        site_values = ", ".join(map(str, sites))
-        site_tables.append(f"static const int sites_{name}[] = {{{site_values}}};")
+        site_values = ", ".join(f"{{{child}, {message}}}" for child, message in sites)
+        site_tables.append(f"static const probe_site sites_{name}[] = {{{site_values}}};")
         entries.append(f"    {{probe_{name}, sites_{name}, {len(sites)}}},")
     definition_text = "\n".join(definitions)
     table_text = "\n".join(site_tables)
     entry_text = "\n".join(entries)
+    validate_message = """
+    if (state->message.call != GOEMON_JP_MESSAGE_NONE) {
+        const goemon_jp_guest_frame* leaf = &state->frames[state->frame_count - 1];
+        const uint8_t expected = functions[leaf->function_index].sites[leaf->call_site - 1].message;
+        if (expected == GOEMON_JP_MESSAGE_NONE) {
+            return false;
+        }
+        if (state->message.call == GOEMON_JP_MESSAGE_RETURN) {
+            return state->message.queue == 0 &&
+                (state->message.argument == 0 || state->message.argument == -1);
+        }
+        return state->message.call == expected && state->message.queue != 0 &&
+            state->message.queue == (int32_t)state->registers[4] &&
+            state->message.argument == (int32_t)state->registers[5] &&
+            (int32_t)state->registers[6] == 1; // OS_MESG_BLOCK
+    }""" if message_continuations else """
+    if (state->message.call != GOEMON_JP_MESSAGE_NONE) {
+        return false;
+    }"""
+    resume_message = """
+    if (execution.state.message.call != GOEMON_JP_MESSAGE_NONE &&
+        !goemon_jp_probe_resume_message_call(rdram, &execution.state)) {
+        return GOEMON_JP_CHECKPOINT_INVALID;
+    }""" if message_continuations else ""
     return f"""{PROBE_HEADER}
 {prototypes}
 
 {definition_text}
+typedef struct {{
+    int child;
+    uint8_t message;
+}} probe_site;
+
 {table_text}
 
 static const struct {{
     probe_function* call;
-    const int* callees;
+    const probe_site* sites;
     uint32_t site_count;
 }} functions[] = {{
 {entry_text}
@@ -196,12 +237,12 @@ static bool valid_checkpoint(const goemon_jp_guest_checkpoint* state) {{
             return false;
         }}
         if (depth + 1 < state->frame_count) {{
-            const int callee = functions[index].callees[site - 1];
+            const int callee = functions[index].sites[site - 1].child;
             if (callee < 0 || (uint32_t)callee != state->frames[depth + 1].function_index) {{
                 return false;
             }}
         }}
-    }}
+    }}{validate_message}
     return true;
 }}
 
@@ -219,7 +260,7 @@ goemon_jp_checkpoint_result goemon_jp_guest_checkpoint_probe(
     if (!valid_checkpoint(resume)) {{
         return GOEMON_JP_CHECKPOINT_INVALID;
     }}
-    execution.state = *resume;
+    execution.state = *resume;{resume_message}
     restore_cpu(ctx, &execution.state);
     // Finish the leaf first, then return to suspended callers with the
     // same register context. A callback may overwrite the original input.
@@ -260,16 +301,39 @@ def find_body(directory: Path, name: str) -> list[str]:
     return body
 
 
+def instrument_root(source: Path, name: str, body: list[str], probe: str) -> str:
+    original_definition = (
+        f"RECOMP_FUNC void {name}(uint8_t* rdram, recomp_context* ctx) {{\n"
+        + "\n".join(body) + "\n;}"
+    )
+    source_text = source.read_text(encoding="utf-8")
+    if source_text.count(original_definition) != 1:
+        raise ValueError(f"{source.name} does not contain the selected root function {name}")
+    wrapper = f"""RECOMP_FUNC void {name}(uint8_t* rdram, recomp_context* ctx) {{
+    const goemon_jp_checkpoint_result status =
+        goemon_jp_guest_checkpoint_probe(rdram, ctx, NULL, NULL, NULL);
+    if (status != GOEMON_JP_CHECKPOINT_FINISHED) abort();
+}}
+"""
+    return '#include "guest_checkpoint_probe.h"\n' + source_text.replace(
+        original_definition, wrapper, 1) + "\n" + probe
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--generated", required=True, type=Path)
     parser.add_argument("--function", required=True)
     parser.add_argument("--callee", action="append", default=[])
+    parser.add_argument("--message-continuations", action="store_true")
+    parser.add_argument("--instrument-root-source", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     try:
         names = dict.fromkeys([args.function, *args.callee])
-        result = generate({name: find_body(args.generated, name) for name in names})
+        bodies = {name: find_body(args.generated, name) for name in names}
+        result = generate(bodies, message_continuations=args.message_continuations)
+        if args.instrument_root_source:
+            result = instrument_root(args.instrument_root_source, args.function, bodies[args.function], result)
     except ValueError as error:
         parser.error(str(error))
     args.output.write_text(result, encoding="utf-8")

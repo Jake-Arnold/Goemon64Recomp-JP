@@ -65,6 +65,64 @@ bool ultramodern::jp_rearm_external_messages_after_verified_exit(
 """
 
 
+MESSAGE_CONTINUATION_SCOPE = r"""using goemon_jp::savestate::MessageCall;
+using goemon_jp::savestate::MessageContinuation;
+
+// Publish only after the operation has reached a scheduler hand-off.
+class MessageContinuationScope {
+    uint8_t* rdram;
+
+public:
+    MessageContinuationScope(uint8_t* rdram, MessageContinuation state) : rdram(rdram) {
+        ultramodern::jp_set_message_continuation(rdram, state);
+    }
+
+    MessageContinuationScope(const MessageContinuationScope&) = delete;
+    MessageContinuationScope& operator=(const MessageContinuationScope&) = delete;
+
+    ~MessageContinuationScope() {
+        ultramodern::jp_set_message_continuation(rdram, std::nullopt);
+    }
+};
+
+static s32 finish_message_call(RDRAM_ARG bool success) {
+    const s32 result = success ? 0 : -1;
+    const MessageContinuationScope continuation(rdram, {MessageCall::Return, 0, result});
+    ultramodern::check_running_queue(PASS_RDRAM1);
+    return result;
+}
+
+"""
+
+RESUME_MESSAGE_CALL = r"""
+bool ultramodern::jp_resume_message_call(
+        uint8_t* rdram, const MessageContinuation& state, int32_t& result) {
+    const auto self = ultramodern::this_thread();
+    if (self == NULLPTR || TO_PTR(OSThread, self)->queue != NULLPTR ||
+            ultramodern::guest_shutdown_requested_for_future_reset()) {
+        return false;
+    }
+    switch (state.call) {
+        case MessageCall::Receive:
+            result = finish_message_call(rdram, do_recv(rdram, state.queue, state.argument, true));
+            return true;
+        case MessageCall::Send:
+        case MessageCall::Jam:
+            result = finish_message_call(rdram,
+                do_send(rdram, state.queue, state.argument, state.call == MessageCall::Jam, true));
+            return true;
+        case MessageCall::Return:
+            if (state.argument != 0 && state.argument != -1) {
+                return false;
+            }
+            result = state.argument;
+            return true;
+    }
+    return false;
+}
+"""
+
+
 def messages(src: str) -> str:
     if "jp_external_message_gate" in src:
         raise ValueError("External message producer already gated")
@@ -72,6 +130,8 @@ def messages(src: str) -> str:
         '#include "ultramodern/ultramodern.hpp"\n',
         '#include "ultramodern/ultramodern.hpp"\n'
         '#include "jp_generation_publisher_gate.hpp"\n'
+        '#include "jp_message_continuation.hpp"\n'
+        'namespace ultramodern { bool guest_shutdown_requested_for_future_reset(); }\n'
         '#include <cstdio>\n',
         "external message gate include")
     src = once(src,
@@ -87,6 +147,32 @@ def messages(src: str) -> str:
         "    auto jp_lease = jp_external_message_gate.try_acquire();\n"
         "    if (!jp_lease) return;\n",
         "count actual external message enqueue producer")
+    src = once(src, "bool do_send(RDRAM_ARG PTR(OSMesgQueue) mq_, OSMesg msg, bool jam, bool block);\n",
+        MESSAGE_CONTINUATION_SCOPE +
+        "bool do_send(RDRAM_ARG PTR(OSMesgQueue) mq_, OSMesg msg, bool jam, bool block);\n",
+        "insert message continuation scope before the runtime handlers")
+    src = once(src,
+        "            JpQueueWaitScope blocked(jp_active_senders);\n",
+        "            JpQueueWaitScope blocked(jp_active_senders);\n"
+        "            const MessageContinuationScope continuation(rdram,\n"
+        "                {jam ? MessageCall::Jam : MessageCall::Send, mq_, msg});\n",
+        "record a blocked send or jam before switching threads")
+    src = once(src,
+        "            JpQueueWaitScope blocked(jp_active_receivers);\n",
+        "            JpQueueWaitScope blocked(jp_active_receivers);\n"
+        "            const MessageContinuationScope continuation(rdram,\n"
+        "                {MessageCall::Receive, mq_, msg_});\n",
+        "record a blocked receive before switching threads")
+    for result_name, count in (("sent", 2), ("received", 1)):
+        ending = (
+            "    // Check the queue to see if this thread should swap execution to another.\n"
+            "    ultramodern::check_running_queue(PASS_RDRAM1);\n\n"
+            f"    return {result_name} ? 0 : -1;\n"
+        )
+        if src.count(ending) != count:
+            raise ValueError(f"Unexpected return sites for {result_name} message operations")
+        src = src.replace(ending, f"    return finish_message_call(PASS_RDRAM {result_name});\n")
+    src += RESUME_MESSAGE_CALL
     return "// Experimental reset external message queue generation fence.\n" + src
 
 
@@ -183,18 +269,58 @@ void recomp::overlays::register_overlays(""",
 
 
 GUEST_THREAD_BINDINGS = r"""// Keep native thread handles outside of the guest's OSThread record.
-static std::unordered_map<const OSThread*, UltraThreadContext*> jp_guest_thread_bindings;
+struct GuestThreadBinding {
+    UltraThreadContext* context;
+    goemon_jp::savestate::GuestThreadStart initial;
+    bool entered = false;
+    std::optional<goemon_jp::savestate::MessageContinuation> message;
+    const goemon_jp_guest_checkpoint* message_cpu = nullptr;
+};
+
+static std::unordered_map<const OSThread*, GuestThreadBinding> jp_guest_thread_bindings;
+static thread_local UltraThreadContext* jp_current_host_context = nullptr;
 
 static bool is_bound_guest_thread(const OSThread* thread, const UltraThreadContext* context) {
     std::lock_guard lock(jp_guest_context_mutex);
     const auto binding = jp_guest_thread_bindings.find(thread);
-    return binding != jp_guest_thread_bindings.end() && binding->second == context;
+    return binding != jp_guest_thread_bindings.end() && binding->second.context == context;
+}
+
+static bool mark_guest_thread_entered(const OSThread* thread, const UltraThreadContext* context) {
+    std::lock_guard lock(jp_guest_context_mutex);
+    const auto binding = jp_guest_thread_bindings.find(thread);
+    if (binding == jp_guest_thread_bindings.end() || binding->second.context != context) {
+        return false;
+    }
+    binding->second.entered = true;
+    return true;
+}
+
+goemon_jp::savestate::GuestCheckpointCoverage ultramodern::jp_guest_checkpoint_coverage() {
+    std::lock_guard lock(jp_guest_context_mutex);
+    goemon_jp::savestate::GuestCheckpointCoverage coverage{};
+    for (const auto& [address, binding] : jp_guest_thread_bindings) {
+        ++coverage.threads;
+        coverage.not_started += !binding.entered;
+        coverage.message_checkpoints += binding.message_cpu != nullptr && binding.message.has_value();
+    }
+    return coverage;
+}
+
+std::optional<goemon_jp::savestate::GuestThreadStart> ultramodern::jp_get_unstarted_guest_thread(int32_t address) {
+    std::lock_guard lock(jp_guest_context_mutex);
+    for (const auto& [key, binding] : jp_guest_thread_bindings) {
+        if (binding.initial.address == address && !binding.entered) {
+            return binding.initial;
+        }
+    }
+    return std::nullopt;
 }
 
 static bool unbind_guest_thread(const OSThread* thread, const UltraThreadContext* context) {
     std::lock_guard lock(jp_guest_context_mutex);
     const auto binding = jp_guest_thread_bindings.find(thread);
-    if (binding == jp_guest_thread_bindings.end() || binding->second != context) {
+    if (binding == jp_guest_thread_bindings.end() || binding->second.context != context) {
         return false;
     }
     jp_guest_thread_bindings.erase(binding);
@@ -203,7 +329,57 @@ static bool unbind_guest_thread(const OSThread* thread, const UltraThreadContext
 
 static UltraThreadContext* current_guest_context(const OSThread* thread) {
     std::lock_guard lock(jp_guest_context_mutex);
-    return jp_guest_thread_bindings.at(thread);
+    return jp_guest_thread_bindings.at(thread).context;
+}
+
+void ultramodern::jp_set_message_continuation(
+        uint8_t* rdram, std::optional<goemon_jp::savestate::MessageContinuation> message) {
+    if (thread_self == NULLPTR) {
+        return;
+    }
+    std::lock_guard lock(jp_guest_context_mutex);
+    const auto binding = jp_guest_thread_bindings.find(TO_PTR(OSThread, thread_self));
+    // A retired thread may unwind after a new thread takes its guest address.
+    if (binding != jp_guest_thread_bindings.end() && binding->second.context == jp_current_host_context) {
+        binding->second.message = message;
+    }
+}
+
+std::optional<goemon_jp::savestate::MessageContinuation> ultramodern::jp_get_message_continuation(
+        uint8_t* rdram, int32_t guest_thread) {
+    if (guest_thread == NULLPTR) {
+        return std::nullopt;
+    }
+    std::lock_guard lock(jp_guest_context_mutex);
+    const auto binding = jp_guest_thread_bindings.find(TO_PTR(OSThread, guest_thread));
+    return binding == jp_guest_thread_bindings.end() ? std::nullopt : binding->second.message;
+}
+
+void ultramodern::jp_set_message_cpu_checkpoint(uint8_t* rdram, const goemon_jp_guest_checkpoint* cpu) {
+    if (thread_self == NULLPTR) {
+        return;
+    }
+    std::lock_guard lock(jp_guest_context_mutex);
+    const auto binding = jp_guest_thread_bindings.find(TO_PTR(OSThread, thread_self));
+    if (binding != jp_guest_thread_bindings.end() && binding->second.context == jp_current_host_context) {
+        binding->second.message_cpu = cpu;
+    }
+}
+
+std::optional<goemon_jp_guest_checkpoint> ultramodern::jp_get_message_checkpoint(
+        uint8_t* rdram, int32_t guest_thread) {
+    if (guest_thread == NULLPTR) {
+        return std::nullopt;
+    }
+    std::lock_guard lock(jp_guest_context_mutex);
+    const auto it = jp_guest_thread_bindings.find(TO_PTR(OSThread, guest_thread));
+    if (it == jp_guest_thread_bindings.end() || !it->second.message || it->second.message_cpu == nullptr) {
+        return std::nullopt;
+    }
+    goemon_jp_guest_checkpoint checkpoint = *it->second.message_cpu;
+    const auto& message = *it->second.message;
+    checkpoint.message = {static_cast<uint8_t>(message.call), message.queue, message.argument};
+    return checkpoint;
 }
 
 """
@@ -234,6 +410,8 @@ def threads(src: str) -> str:
     src = once(src,
         '#include "ultramodern/ultramodern.hpp"\n',
         '#include "ultramodern/ultramodern.hpp"\n'
+        '#include "jp_message_continuation.hpp"\n'
+        '#include "jp_guest_checkpoint_status.hpp"\n'
         'namespace ultramodern { bool jp_rearm_guest_after_verified_exit(); }\n',
         "guest rearm declaration before out-of-namespace definition")
     src = once(src,
@@ -250,7 +428,7 @@ def threads(src: str) -> str:
     src = once(src,
         "    t->context->running.signal();\n",
         "    std::lock_guard lock(jp_guest_context_mutex);\n"
-        "    jp_guest_thread_bindings.at(t)->running.signal();\n",
+        "    jp_guest_thread_bindings.at(t).context->running.signal();\n",
         "signal a bound host thread")
     src = once(src,
         '    debug_printf("[Scheduling] Resuming execution of thread %d\\n", to_run->id);\n'
@@ -266,7 +444,7 @@ def threads(src: str) -> str:
             "look up the running thread before yielding")
     src = once(src,
         "        self->context == thread_context) {\n",
-        "        is_bound_guest_thread(self, thread_context)) {\n",
+        "        mark_guest_thread_entered(self, thread_context)) {\n",
         "check binding before guest entry")
     src = once(src,
         "    if (self->context == thread_context) {\n"
@@ -279,7 +457,8 @@ def threads(src: str) -> str:
         "    t->context = context;\n"
         "    context->host_thread = std::thread{_thread_func, PASS_RDRAM t_, entrypoint, arg, t->context};\n",
         "        jp_guest_contexts.insert(context);\n"
-        "        jp_guest_thread_bindings.insert_or_assign(t, context);\n"
+        "        jp_guest_thread_bindings.insert_or_assign(t, GuestThreadBinding{\n"
+        "            context, {t_, entrypoint, t->sp, arg}, false, std::nullopt, nullptr});\n"
         "    }\n"
         "    // Preserve the pinned runtime's OSThread layout in guest RAM.\n"
         "    t->context = nullptr;\n"
@@ -295,11 +474,16 @@ def threads(src: str) -> str:
         "    std::lock_guard lock(jp_guest_context_mutex);\n"
         "    const auto binding = jp_guest_thread_bindings.find(t);\n"
         "    if (binding != jp_guest_thread_bindings.end()) {\n"
-        "        UltraThreadContext* context = binding->second;\n"
+        "        UltraThreadContext* context = binding->second.context;\n"
         "        jp_guest_thread_bindings.erase(binding);\n"
         "        context->running.signal();\n"
         "    }\n",
         "unbind and wake a destroyed thread")
+    src = once(src,
+        "    thread_self = self_;\n",
+        "    thread_self = self_;\n"
+        "    jp_current_host_context = thread_context;\n",
+        "identify the native thread owning a continuation scope")
     src = once(src,
         "void ultramodern::request_guest_shutdown_for_future_reset() {\n",
         GUEST_REARM + "void ultramodern::request_guest_shutdown_for_future_reset() {\n",

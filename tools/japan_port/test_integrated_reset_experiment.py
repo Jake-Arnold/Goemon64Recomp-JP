@@ -9,6 +9,7 @@ from pathlib import Path
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -214,8 +215,7 @@ class IntegratedResetTests(unittest.TestCase):
         self.assertIn("mod_context->unload_mods();", texts[5])
 
     def test_actual_pinned_runtime_generator_composition(self):
-        # Exercise all six generated overlays from the actual pinned
-        # N64ModernRuntime checkout; the old tests checked strings only.
+        # Compose the generated overlays against the pinned runtime.
         runtime = ROOT / "lib/N64ModernRuntime"
         inputs = {
             "scheduler": runtime / "ultramodern/src/threadqueue.cpp",
@@ -284,9 +284,11 @@ class IntegratedResetTests(unittest.TestCase):
             "saving": "pi_integrated.cpp",
             "recomp": "recomp_integrated.cpp",
         }
+        composed = {}
         for key, transform in methods.items():
             with self.subTest(component=key):
                 result = transform(generated[key])
+                composed[key] = result
                 self.assertGreater(len(result), 500)
                 self.assertIn("// Experimental ", result)
                 if emit_root:
@@ -295,6 +297,89 @@ class IntegratedResetTests(unittest.TestCase):
                     destination.write_text(result, encoding="utf-8")
                 with self.assertRaisesRegex(ValueError, "already"):
                     transform(result)
+
+        if all(key in composed for key in ("scheduler", "threads", "messages")):
+            scheduling = stage9.stage8.stage6.stage5.instrument_scheduler(
+                (runtime / "ultramodern/src/scheduling.cpp").read_text(encoding="utf-8"))
+            pause = module("jp_pause_for_message_test", "patch_native_pause_resume.py")
+            self.run_message_continuation_regression(runtime, {
+                "threadqueue.cpp": composed["scheduler"],
+                "threads.cpp": pause.threads(composed["threads"]),
+                "mesgqueue.cpp": pause.messages(composed["messages"]),
+                "scheduling.cpp": scheduling,
+            })
+
+    def run_message_continuation_regression(self, runtime, sources):
+        compiler = shutil.which("g++") or shutil.which("c++")
+        if compiler is None:
+            return
+        with tempfile.TemporaryDirectory() as temp:
+            build = Path(temp)
+            for name, source in sources.items():
+                (build / name).write_text(source, encoding="utf-8")
+            fixture = Path(__file__).with_name("test_message_continuation.cpp")
+            probe_tools = fixture.with_name("native_compile")
+            sdk = runtime / "N64Recomp/include"
+            includes = [
+                runtime / "ultramodern/include",
+                runtime / "thirdparty/concurrentqueue",
+                runtime / "thirdparty",
+                ROOT / "src/game",
+                probe_tools,
+                sdk,
+            ]
+            (build / "funcs.h").write_text(
+                "void nested(uint8_t*, recomp_context*);\n"
+                "void osRecvMesg_recomp(uint8_t*, recomp_context*);\n"
+                "void osSendMesg_recomp(uint8_t*, recomp_context*);\n")
+            (build / "funcs_0.c").write_text("""#include "recomp.h"
+#include "funcs.h"
+
+RECOMP_FUNC void entry(uint8_t* rdram, recomp_context* ctx) {
+    uint64_t hi = 0, lo = 0, result = 0;
+    int c1cs = 0;
+    hi = 13;
+    MEM_W(0, ctx->r8) += 1;
+    nested(rdram, ctx);
+    ctx->r16 = hi + ctx->r17;
+    return;
+;}
+RECOMP_FUNC void nested(uint8_t* rdram, recomp_context* ctx) {
+    uint64_t hi = 0, lo = 0, result = 0;
+    int c1cs = 0;
+    lo = 7;
+    if (ctx->r7 == 0) {
+        osRecvMesg_recomp(rdram, ctx);
+    } else {
+        osSendMesg_recomp(rdram, ctx);
+    }
+    ctx->r17 = lo + ctx->r2;
+    return;
+;}
+""")
+            probe_source = build / "checkpoint.c"
+            subprocess.run([
+                sys.executable, str(probe_tools / "generate_checkpoint_probe.py"),
+                "--generated", str(build), "--function", "entry",
+                "--callee", "nested", "--message-continuations",
+                "--instrument-root-source", str(build / "funcs_0.c"), "--output", str(probe_source),
+            ], check=True, cwd=ROOT, timeout=10)
+            probe_object = build / "checkpoint.o"
+            subprocess.run([
+                shutil.which("cc") or compiler, "-x", "c", "-std=gnu17", "-O2",
+                *[f"-I{path}" for path in includes],
+                "-c", str(probe_source), "-o", str(probe_object),
+            ], check=True, cwd=ROOT, timeout=30)
+            target = build / "message-continuation"
+            subprocess.run([
+                compiler, "-std=c++20", "-O2", "-pthread",
+                "-DGOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE",
+                *[f"-I{path}" for path in includes],
+                *[str(build / name) for name in sources],
+                str(fixture), str(probe_tools / "message_checkpoint_bridge.cpp"),
+                str(probe_object), "-o", str(target),
+            ], check=True, cwd=ROOT, timeout=60)
+            subprocess.run([str(target)], check=True, cwd=ROOT, timeout=12)
 
     def test_host_double_reboot_gate_regression(self):
         compiler = shutil.which("g++") or shutil.which("c++")

@@ -38,6 +38,12 @@ Add `-DGOEMON_JP_CHECKPOINT_PROBE_FUNCTION=func_80000450_1050` to the isolated C
 
 Use `GOEMON_JP_CHECKPOINT_PROBE_CALLEES` to name additional directly called functions as a CMake list. The probe can resume the innermost captured frame and unwind back through its instrumented callers. Checkpoints are in memory and tied to the selected generated bodies. Indirect calls run normally and only expose a point after they return. Functions with extra C locals, including jump-table temporaries, are rejected. Capturing a full game state still requires broader code generation coverage, continuations for suspended native calls, and a consistent snapshot across workers.
 
+Set `GOEMON_JP_CHECKPOINT_PROBE_MESSAGES=ON` to instrument direct calls to the integrated runtime's send, jam, and receive functions. Once a caller is parked, the runtime can copy its saved CPU frames together with the pending queue operation or the result of an operation that already completed. After the restored scheduler selects the thread, the probe finishes the operation if necessary, restores the return register, and resumes through the saved callers.
+
+For a live Japanese preview, configure the archive with `GOEMON_JP_CHECKPOINT_PROBE_FUNCTION=func_80000580_1180`, `GOEMON_JP_CHECKPOINT_PROBE_MESSAGES=ON`, and `GOEMON_JP_CHECKPOINT_INSTRUMENT_ROOT_UNIT=funcs_0.c`. The selected thread runs through the checkpoint probe in the integrated runtime. The F5 preview reports live thread coverage, and F7 reports restore availability for the selected slot.
+
+The scheduler fixture exercises this with copied guest RAM and a fresh native thread generation. A game-wide save state still needs a coordinator for all guest threads and native workers, plus checkpoint coverage for other native waits.
+
 ## Verified local build, 15 November 2026
 
 With the Japanese ROM SHA-1 `6f8745fecc3a5e7d4918c7a73353eb0726116ded`, the pinned x86-64 `N64Recomp` emitted 145 C source units. The isolated build passed CMake configuration, Clang 17 compilation and static archiving with **exit code 0** (33 MiB library, debug/unoptimised build).

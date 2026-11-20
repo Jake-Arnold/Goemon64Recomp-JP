@@ -53,6 +53,14 @@ namespace recomp {
     #define DEFINE_PAUSE_INPUT()
 #endif
 
+#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+    #define DEFINE_NATIVE_STATE_INPUTS() \
+        DEFINE_INPUT(SAVE_STATE, 0, "Save State (Preview)", "Check whether the current game can save a native state.") \
+        DEFINE_INPUT(LOAD_STATE, 0, "Load State (Preview)", "Check whether the selected native state can be restored.")
+#else
+    #define DEFINE_NATIVE_STATE_INPUTS()
+#endif
+
     #define DEFINE_RECOMP_UI_INPUTS() \
         DEFINE_INPUT(TOGGLE_MENU, 0, "Toggle Menu", "Open or close this configuration menu from in game.") \
         DEFINE_INPUT(ACCEPT_MENU, 0, "Accept (Menu)", "In the recomp interface, performs the action for the currently highlighted item. Like pressing a button, or toggling a switch.") \
@@ -60,7 +68,8 @@ namespace recomp {
         DEFINE_JP_RESET_INPUT() \
         DEFINE_PAUSE_INPUT() \
         DEFINE_INPUT(PREVIOUS_SAVE_SLOT, 0, "Previous Save Slot", "Select the previous save-state slot.") \
-        DEFINE_INPUT(NEXT_SAVE_SLOT, 0, "Next Save Slot", "Select the next save-state slot.")
+        DEFINE_INPUT(NEXT_SAVE_SLOT, 0, "Next Save Slot", "Select the next save-state slot.") \
+        DEFINE_NATIVE_STATE_INPUTS()
 
     #define DEFINE_ALL_INPUTS() \
         DEFINE_N64_AXIS_INPUTS() \
@@ -144,6 +153,10 @@ namespace recomp {
 #endif
         std::vector<InputField> previous_save_slot;
         std::vector<InputField> next_save_slot;
+#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+        std::vector<InputField> save_state;
+        std::vector<InputField> load_state;
+#endif
     };
 
     inline const std::vector<InputField>& get_default_mapping_for_input(const DefaultN64Mappings& defaults, const GameInput input) {
@@ -178,6 +191,10 @@ namespace recomp {
 #endif
             case GameInput::PREVIOUS_SAVE_SLOT: return defaults.previous_save_slot;
             case GameInput::NEXT_SAVE_SLOT: return defaults.next_save_slot;
+#ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
+            case GameInput::SAVE_STATE: return defaults.save_state;
+            case GameInput::LOAD_STATE: return defaults.load_state;
+#endif
             default: return empty_input_field;
         }
     }
@@ -231,6 +248,7 @@ namespace recomp {
     void set_background_input_mode(BackgroundInputMode mode);
 
     int get_save_slot();
+    std::string take_save_state_status();
     bool game_input_disabled();
     bool all_input_disabled();
 }

@@ -6,8 +6,6 @@
 #include <vector>
 
 namespace goemon64 {
-    void quicksave_save();
-    void quicksave_load();
     std::vector<uint8_t> decompress_mnsg(std::span<const uint8_t> compressed_rom);
     std::vector<uint8_t> decompress_mnsg_japan(std::span<const uint8_t> compressed_rom);
 };

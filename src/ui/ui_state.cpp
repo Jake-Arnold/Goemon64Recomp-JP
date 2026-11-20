@@ -165,6 +165,8 @@ class UIState {
     Rml::Element* save_slot_label = nullptr;
     bool hud_visible = false;
     int displayed_save_slot = 0;
+    std::string save_state_status;
+    std::chrono::steady_clock::time_point save_state_status_expiry{};
     Rml::Element* fps_label = nullptr;
     bool fps_visible = false;
     std::chrono::steady_clock::time_point fps_sample{};
@@ -270,9 +272,18 @@ public:
             return false;
         }
 
+        const auto now = std::chrono::steady_clock::now();
+        auto new_status = recomp::take_save_state_status();
+        const bool status_expired = !save_state_status.empty() && now >= save_state_status_expiry;
         const int slot = recomp::get_save_slot();
-        if (slot != displayed_save_slot) {
-            save_slot_label->SetInnerRML("Save slot " + std::to_string(slot));
+        if (slot != displayed_save_slot || status_expired || !new_status.empty()) {
+            save_state_status = std::move(new_status);
+            save_state_status_expiry = now + std::chrono::seconds{4};
+            auto label = "Save slot " + std::to_string(slot);
+            if (!save_state_status.empty()) {
+                label += " — " + save_state_status;
+            }
+            save_slot_label->SetInnerRML(label);
             displayed_save_slot = slot;
         }
         const bool show_fps = goemon64::get_show_fps();
