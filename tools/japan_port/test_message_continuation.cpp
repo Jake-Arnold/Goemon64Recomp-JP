@@ -459,6 +459,8 @@ static void test_timer_restore() {
     assert((*messages)[0].mesg == 40 && (*messages)[1].mesg == 41);
 }
 
+void test_video_checkpoint();
+
 int main() {
     test_external_queue_admission();
     alignas(OSThread) uint8_t original_ram[ram_size]{};
@@ -475,4 +477,5 @@ int main() {
     run_generation(restored_ram, ProbeDriver);
     test_idle_restore();
     test_timer_restore();
+    test_video_checkpoint();
 }

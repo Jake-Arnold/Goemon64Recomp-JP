@@ -103,8 +103,13 @@ public:
 
     template <typename Inspect>
     [[nodiscard]] bool inspect_parked(PauseWorker worker, Inspect inspect) const {
+        return inspect_parked_workers(static_cast<std::uint32_t>(worker), inspect);
+    }
+
+    template <typename Inspect>
+    [[nodiscard]] bool inspect_parked_workers(std::uint32_t mask, Inspect inspect) const {
         std::lock_guard lock(mutex_);
-        if ((parked_workers_ & static_cast<std::uint32_t>(worker)) == 0) {
+        if ((parked_workers_ & mask) != mask) {
             return false;
         }
         inspect();

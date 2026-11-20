@@ -149,6 +149,43 @@ def timer(src: str) -> str:
     return "// JP F6 cooperative pause: timer worker, guest clock and N64 time.\n" + src
 
 
+VIDEO_SNAPSHOT = r"""
+std::optional<goemon_jp::savestate::VideoCheckpoint> ultramodern::jp_snapshot_video() {
+    using goemon_jp::pause::PauseWorker;
+    using namespace goemon_jp::savestate;
+    constexpr auto video_workers = static_cast<uint32_t>(PauseWorker::Vi) |
+        static_cast<uint32_t>(PauseWorker::Graphics);
+    std::optional<VideoCheckpoint> result;
+    (void)goemon_jp::pause::controller().inspect_parked_workers(video_workers, [&] {
+        std::lock_guard lock(events_context.message_mutex);
+        auto& vi = events_context.vi;
+        if (vi.get_next_state()->mode == nullptr) return;
+        VideoCheckpoint snapshot{};
+        for (size_t i = 0; i < snapshot.buffers.size(); ++i) {
+            const auto& buffer = vi.states[i];
+            const auto mode = buffer.mode_address != NULLPTR ? VideoModeSource::Guest :
+                buffer.mode != nullptr ? VideoModeSource::Dummy : VideoModeSource::None;
+            snapshot.buffers[i] = {mode, buffer.mode_address, buffer.framebuffer,
+                {buffer.mq, buffer.msg}, buffer.state, buffer.control, buffer.retrace_count};
+        }
+        snapshot.current_buffer = vi.cur_state;
+        snapshot.field = vi.field;
+        snapshot.remaining_retraces = vi.remaining_retraces;
+        snapshot.total_retraces = total_vis;
+        snapshot.registers = vi.regs;
+        snapshot.presented_registers = vi.update_screen_regs;
+        snapshot.sp = {events_context.sp.mq, events_context.sp.msg};
+        snapshot.dp = {events_context.dp.mq, events_context.dp.msg};
+        snapshot.ai = {events_context.ai.mq, events_context.ai.msg};
+        snapshot.si = {events_context.si.mq, events_context.si.msg};
+        result = snapshot;
+    });
+    return result;
+}
+
+"""
+
+
 def events(src: str) -> str:
     if "JP F6 cooperative pause" in src:
         raise ValueError("Events source already paused")
@@ -159,10 +196,10 @@ def events(src: str) -> str:
         "native VI/gfx pause include")
     src = once(src,
         '    while (!exited) {\n'
-        '        // Determine the next VI time',
+        '        if (events_context.vi.waiting_for_restored_guest) {',
         '    while (!exited) {\n'
         '        if (!goemon_jp::pause::controller().wait_if_paused(exited, goemon_jp::pause::PauseWorker::Vi)) break;\n'
-        '        // Determine the next VI time',
+        '        if (events_context.vi.waiting_for_restored_guest) {',
         "VI frame boundary")
     src = once(src,
         '        ultramodern::sleep_until(next);\n'
@@ -183,6 +220,10 @@ def events(src: str) -> str:
         '        if (!goemon_jp::pause::controller().wait_if_paused(exited, goemon_jp::pause::PauseWorker::Graphics)) break;\n'
         '        // Try to pull an action from the queue\n',
         "graphics action loop boundary")
+    src = once(src,
+        "uint64_t total_vis = 0;\n",
+        "uint64_t total_vis = 0;\n" + VIDEO_SNAPSHOT,
+        "copy the paused VI and presented frame registers together")
     return "// JP F6 cooperative pause: preserve last VI/frame/RSP and renderer.\n" + src
 
 

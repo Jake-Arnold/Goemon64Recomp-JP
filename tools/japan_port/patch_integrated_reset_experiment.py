@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from textwrap import indent
 
 
 def once(src: str, old: str, new: str, label: str) -> str:
@@ -714,6 +715,8 @@ bool ultramodern::jp_rearm_events_after_verified_exit(std::uint64_t old_generati
         std::lock_guard<std::mutex> lock(events_context.message_mutex);
         events_context.vi.cur_state = 0;
         events_context.vi.field = 0;
+        events_context.vi.remaining_retraces = 1;
+        events_context.vi.waiting_for_restored_guest = false;
         events_context.vi.states[0] = ViState{};
         events_context.vi.states[1] = ViState{};
         events_context.vi.regs = {};
@@ -738,6 +741,88 @@ bool ultramodern::jp_rearm_events_after_verified_exit(std::uint64_t old_generati
 """
 
 
+VIDEO_RESTORE = r"""
+static uint8_t* video_restore_rdram = nullptr;
+
+bool ultramodern::jp_prepare_video_restore(const goemon_jp::savestate::VideoCheckpoint& saved,
+        uint64_t generation, std::span<uint8_t> restored_ram) {
+    using goemon_jp::savestate::VideoModeSource;
+    const auto publisher = jp_config_publisher_gate.snapshot();
+    if (!publisher.open || publisher.generation != generation || publisher.in_flight != 0 ||
+            events_context.vi.thread.joinable() || events_context.sp.gfx_thread.joinable() ||
+            events_context.sp.task_thread.joinable() || video_restore_rdram != nullptr ||
+            saved.current_buffer < 0 || saved.current_buffer > 1 || saved.field < 0 || saved.field > 1 ||
+            restored_ram.empty() || saved.registers.VI_ORIGIN_REG >= restored_ram.size() ||
+            saved.presented_registers.VI_ORIGIN_REG >= restored_ram.size()) {
+        return false;
+    }
+    const auto in_guest_ram = [&](int32_t address, size_t size, size_t alignment) {
+        constexpr uint32_t guest_base = 0x80000000;
+        const auto raw = static_cast<uint32_t>(address);
+        const auto offset = raw - guest_base;
+        return raw >= guest_base && offset % alignment == 0 &&
+            size <= restored_ram.size() && offset <= restored_ram.size() - size;
+    };
+    const auto valid_queue = [&](int32_t address) {
+        return address == NULLPTR || in_guest_ram(address, sizeof(OSMesgQueue), alignof(OSMesgQueue));
+    };
+
+    ViState buffers[2]{};
+    for (size_t i = 0; i < saved.buffers.size(); ++i) {
+        const auto& source = saved.buffers[i];
+        auto& target = buffers[i];
+        switch (source.mode_source) {
+            case VideoModeSource::None:
+                if (i == static_cast<size_t>(saved.current_buffer ^ 1)) return false;
+                break;
+            case VideoModeSource::Dummy:
+                target.mode = &dummy_mode;
+                break;
+            case VideoModeSource::Guest:
+                if (!in_guest_ram(source.mode_address, sizeof(OSViMode), alignof(OSViMode))) return false;
+                target.mode = reinterpret_cast<const OSViMode*>(restored_ram.data() +
+                    (static_cast<uint32_t>(source.mode_address) - 0x80000000));
+                target.mode_address = source.mode_address;
+                break;
+            default:
+                return false;
+        }
+        if (!valid_queue(source.retrace.queue) || osVirtualToPhysical(source.framebuffer) >= restored_ram.size()) {
+            return false;
+        }
+        target.framebuffer = source.framebuffer;
+        target.mq = source.retrace.queue;
+        target.msg = source.retrace.message;
+        target.state = source.flags;
+        target.control = source.control;
+        target.retrace_count = source.retrace_count;
+    }
+    if (!valid_queue(saved.sp.queue) || !valid_queue(saved.dp.queue) ||
+            !valid_queue(saved.ai.queue) || !valid_queue(saved.si.queue)) {
+        return false;
+    }
+
+    std::lock_guard lock(events_context.message_mutex);
+    events_context.vi.states[0] = buffers[0];
+    events_context.vi.states[1] = buffers[1];
+    events_context.vi.cur_state = saved.current_buffer;
+    events_context.vi.field = saved.field;
+    events_context.vi.remaining_retraces = saved.remaining_retraces;
+    events_context.vi.regs = saved.registers;
+    events_context.vi.update_screen_regs = saved.presented_registers;
+    events_context.sp.mq = saved.sp.queue;
+    events_context.sp.msg = saved.sp.message;
+    events_context.dp = {saved.dp.queue, saved.dp.message};
+    events_context.ai = {saved.ai.queue, saved.ai.message};
+    events_context.si = {saved.si.queue, saved.si.message};
+    total_vis = saved.total_retraces;
+    video_restore_rdram = restored_ram.data();
+    return true;
+}
+
+"""
+
+
 def events(src: str) -> str:
     if "jp_rearm_events_after_verified_exit" in src:
         raise ValueError("Events rearm already installed")
@@ -746,13 +831,90 @@ def events(src: str) -> str:
         "    void jp_report_config_action_producer_gate();\n"
         "    bool jp_rearm_events_after_verified_exit(std::uint64_t);\n",
         "events rearm declaration")
-    # On the new generation, VI may start before the game loads osViSetMode.
-    # Prime its next-mode pointer with the existing valid dummy mode first.
+    src = once(src,
+        '#include "ultramodern/ultramodern.hpp"\n',
+        '#include "ultramodern/ultramodern.hpp"\n'
+        '#include "jp_video_checkpoint.hpp"\n',
+        "video and interrupt checkpoint types")
+    src = once(src,
+        "    const OSViMode* mode;\n",
+        "    const OSViMode* mode;\n"
+        "    int32_t mode_address;\n",
+        "track the guest address for a mode instead of serializing its host pointer")
+    src = once(src,
+        "        int field;\n",
+        "        int field;\n"
+        "        int remaining_retraces = 1;\n"
+        "        bool waiting_for_restored_guest = false;\n",
+        "retain VI retrace phase in generation state")
+    src = once(src,
+        "    int remaining_retraces = 1;\n\n"
+        "    while (!exited) {\n",
+        "    int& remaining_retraces = events_context.vi.remaining_retraces;\n\n"
+        "    while (!exited) {\n",
+        "resume the saved retrace countdown")
+    src = once(src,
+        "        // Determine the next VI time",
+        "        if (events_context.vi.waiting_for_restored_guest) {\n"
+        "            if (!ultramodern::is_game_started()) {\n"
+        "                ultramodern::sleep_milliseconds(1);\n"
+        "                continue;\n"
+        "            }\n"
+        "            events_context.vi.waiting_for_restored_guest = false;\n"
+        "        }\n"
+        "        // Determine the next VI time",
+        "keep the restored frame while the guest is still starting")
+    vi_boundary = "        // If the game hasn't started yet, set a dummy VI mode and origin.\n"
+    callback_boundary = "        if (events_callbacks.vi_callback != nullptr) {\n"
+    vi_start = src.index(vi_boundary)
+    vi_end = src.index(callback_boundary, vi_start)
+    scanout = src[vi_start:vi_end]
+    scanout_without_lock = once(scanout,
+        "            std::lock_guard lock{ events_context.message_mutex };\n",
+        "", "share one VI lock across scanout and interrupt dispatch")
+    src = once(src, scanout,
+        "        {\n"
+        "            std::lock_guard lock{ events_context.message_mutex };\n" +
+        indent(scanout_without_lock.rstrip() + "\n", "    ") +
+        "        }\n\n",
+        "serialize VI scanout with guest writes and unlock before callbacks")
+    for name in ("Next", "Current"):
+        signature = f'extern "C" PTR(void) osViGet{name}Framebuffer() {{\n'
+        src = once(src, signature,
+            signature + "    std::lock_guard lock{ events_context.message_mutex };\n",
+            "serialize guest framebuffer queries with scanout")
+    src = once(src,
+        "    next_state->mode = &dummy_mode;\n",
+        "    next_state->mode = &dummy_mode;\n"
+        "    next_state->mode_address = NULLPTR;\n",
+        "distinguish the host dummy video mode")
+    src = once(src,
+        "    next_state->mode = mode;\n",
+        "    next_state->mode = mode;\n"
+        "    next_state->mode_address = mode_;\n",
+        "save the mode's guest address")
+    src = once(src,
+        "void ultramodern::init_events(RDRAM_ARG ultramodern::renderer::WindowHandle window_handle) {\n",
+        VIDEO_RESTORE + "void ultramodern::init_events(RDRAM_ARG ultramodern::renderer::WindowHandle window_handle) {\n",
+        "bind the restored video and interrupt state before starting workers")
     src = once(src,
         "    events_context.rdram = rdram;\n",
         "    events_context.rdram = rdram;\n"
-        "    set_dummy_vi(false);\n",
-        "seed VI mode before starting new native VI worker")
+        "    const bool restored_video = video_restore_rdram != nullptr;\n"
+        "    if (restored_video && video_restore_rdram != rdram) {\n"
+        "        throw std::runtime_error(\"Video checkpoint staged against different RDRAM\");\n"
+        "    }\n"
+        "    video_restore_rdram = nullptr;\n"
+        "    events_context.vi.waiting_for_restored_guest = restored_video;\n"
+        "    if (!restored_video) set_dummy_vi(false);\n",
+        "keep restored modes instead of seeding the launcher dummy")
+    src = once(src,
+        "    events_context.vi.thread = std::thread{ vi_thread_func };\n",
+        "    if (restored_video) {\n"
+        "        events_context.action_queue.enqueue(ScreenUpdateAction{events_context.vi.update_screen_regs});\n"
+        "    }\n"
+        "    events_context.vi.thread = std::thread{ vi_thread_func };\n",
+        "send the saved presentation registers to the fresh renderer")
     src = once(src,
         "void ultramodern::jp_report_config_action_producer_gate() {\n",
         EVENT_REARM + "void ultramodern::jp_report_config_action_producer_gate() {\n",

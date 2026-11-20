@@ -48,6 +48,8 @@ The external-message queue can copy its pending records in FIFO order and restor
 
 At its pause boundary the timer worker publishes its active guest timer addresses. The timer snapshot also keeps pending add and remove commands in order and saves logical clock values. Deadlines, intervals, and message targets stay in the RAM image. The test rearms the old timer generation, restores against copied RAM, and checks delivery order and cancellation after the new worker starts.
 
+The video snapshot keeps both VI buffers, mode addresses, retrace phase, the scanout and presented registers, and SP, DP, AI, and SI message targets. Cold startup rebinds guest modes to the restored RAM and queues the saved presentation before retraces resume. The runtime fixture checks that handoff with a test renderer. RT64's internal GPU and framebuffer data still need recovery work.
+
 A game-wide save state still needs a coordinator to hold those boundaries while capturing RAM, together with the device state owned by the workers and the renderer.
 
 ## Verified local build, 15 November 2026

@@ -298,7 +298,7 @@ class IntegratedResetTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "already"):
                     transform(result)
 
-        if all(key in composed for key in ("scheduler", "threads", "messages", "timer")):
+        if all(key in composed for key in ("scheduler", "threads", "messages", "timer", "events")):
             scheduling = stage9.stage8.stage6.stage5.instrument_scheduler(
                 (runtime / "ultramodern/src/scheduling.cpp").read_text(encoding="utf-8"))
             pause = module("jp_pause_for_message_test", "patch_native_pause_resume.py")
@@ -307,6 +307,7 @@ class IntegratedResetTests(unittest.TestCase):
                 "threads.cpp": pause.threads(composed["threads"]),
                 "mesgqueue.cpp": pause.messages(composed["messages"]),
                 "timer.cpp": pause.timer(composed["timer"]),
+                "events.cpp": pause.events(composed["events"]),
                 "scheduling.cpp": scheduling,
             })
 
@@ -393,7 +394,8 @@ RECOMP_FUNC void nested(uint8_t* rdram, recomp_context* ctx) {
                 "-DGOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE",
                 *[f"-I{path}" for path in includes],
                 *[str(build / name) for name in sources],
-                str(fixture), str(probe_tools / "message_checkpoint_bridge.cpp"),
+                str(fixture), str(fixture.with_name("test_video_checkpoint.cpp")),
+                str(probe_tools / "message_checkpoint_bridge.cpp"),
                 str(probe_object), "-o", str(target),
             ], check=True, cwd=ROOT, timeout=60)
             subprocess.run([str(target)], check=True, cwd=ROOT, timeout=12)
