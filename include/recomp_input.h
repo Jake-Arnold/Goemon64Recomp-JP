@@ -46,11 +46,19 @@ namespace recomp {
     #define DEFINE_JP_RESET_INPUT()
 #endif
 
+#ifdef GOEMON_JP_NATIVE_F6_PAUSE_ACTIVE
+    #define DEFINE_PAUSE_INPUT() \
+        DEFINE_INPUT(PAUSE_GAME, 0, "Pause / Resume", "Pause or resume the running game.")
+#else
+    #define DEFINE_PAUSE_INPUT()
+#endif
+
     #define DEFINE_RECOMP_UI_INPUTS() \
         DEFINE_INPUT(TOGGLE_MENU, 0, "Toggle Menu", "Open or close this configuration menu from in game.") \
         DEFINE_INPUT(ACCEPT_MENU, 0, "Accept (Menu)", "In the recomp interface, performs the action for the currently highlighted item. Like pressing a button, or toggling a switch.") \
         DEFINE_INPUT(APPLY_MENU, 0, "Apply (Menu)", "In the recomp interface, if changes are made to a configuration that requires applying your settings, this will apply the current changes.") \
-        DEFINE_JP_RESET_INPUT()
+        DEFINE_JP_RESET_INPUT() \
+        DEFINE_PAUSE_INPUT()
 
     #define DEFINE_ALL_INPUTS() \
         DEFINE_N64_AXIS_INPUTS() \
@@ -129,6 +137,9 @@ namespace recomp {
 #if defined(GOEMON_JAPAN_NATIVE) || defined(GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE)
         std::vector<InputField> reset_game;
 #endif
+#ifdef GOEMON_JP_NATIVE_F6_PAUSE_ACTIVE
+        std::vector<InputField> pause_game;
+#endif
     };
 
     inline const std::vector<InputField>& get_default_mapping_for_input(const DefaultN64Mappings& defaults, const GameInput input) {
@@ -157,6 +168,9 @@ namespace recomp {
             case GameInput::APPLY_MENU: return defaults.apply_menu;
 #if defined(GOEMON_JAPAN_NATIVE) || defined(GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE)
             case GameInput::RESET_GAME: return defaults.reset_game;
+#endif
+#ifdef GOEMON_JP_NATIVE_F6_PAUSE_ACTIVE
+            case GameInput::PAUSE_GAME: return defaults.pause_game;
 #endif
             default: return empty_input_field;
         }

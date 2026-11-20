@@ -1,5 +1,10 @@
 # Japanese native F6 pause/resume — experimental
 
+In the unified launcher, **Controls → Pause / Resume** is shared by USA and
+Japan. F6 is the default keyboard binding. It can be changed to another key
+or a controller button. The host handles the binding while guest input is
+paused, so the same binding also resumes play.
+
 ## Scope and controls
 
 This branch adds an **in-process F6 pause toggle** to the Japanese

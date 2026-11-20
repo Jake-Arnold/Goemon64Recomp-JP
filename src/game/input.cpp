@@ -156,24 +156,43 @@ bool should_override_keystate(SDL_Scancode key, SDL_Keymod mod) {
     return false;        
 }
 
+#ifdef GOEMON_JP_NATIVE_F6_PAUSE_ACTIVE
+static bool handle_pause_binding(recomp::InputDevice device, InputType type, int32_t input) {
+    if (scanning_device != recomp::InputDevice::COUNT) {
+        return false;
+    }
+
+    const bool paused = ultramodern::jp_guest_is_paused();
+    if (!paused && (!ultramodern::is_game_started() ||
+                    recomp::all_input_disabled() || recompui::is_context_capturing_input())) {
+        return false;
+    }
+
+    for (size_t slot = 0; slot < recomp::bindings_per_input; ++slot) {
+        const auto& binding = recomp::get_input_binding(recomp::GameInput::PAUSE_GAME, slot, device);
+        if (binding.input_type == static_cast<uint32_t>(type) && binding.input_id == input) {
+            if (ultramodern::jp_set_guest_paused(!paused)) {
+                recomp::jp_set_audio_paused(!paused);
+            }
+            return true;
+        }
+    }
+    return false;
+}
+#endif
+
 bool sdl_event_filter(void* userdata, SDL_Event* event) {
     switch (event->type) {
     case SDL_EventType::SDL_KEYDOWN:
         {
             SDL_KeyboardEvent* keyevent = &event->key;
 #ifdef GOEMON_JP_NATIVE_F6_PAUSE_ACTIVE
-            // F6 must be handled by the host SDL event pump, NOT by
-            // poll_inputs(): the latter stops with guest VI scheduling.
-            // Accept only keydown edges; held/repeat events do not toggle.
+            // The guest stops polling inputs while paused. Handle the
+            // configured key on the host SDL event pump instead.
             if (!keyevent->repeat &&
-                keyevent->keysym.scancode == SDL_SCANCODE_F6) {
-                const bool paused = ultramodern::jp_guest_is_paused();
-                if (paused || (ultramodern::is_game_started() &&
-                               !recomp::all_input_disabled())) {
-                    (void)ultramodern::jp_set_guest_paused(!paused);
-                    recomp::jp_set_audio_paused(!paused);
-                    return false; // Host hotkey is not a guest/UI key.
-                }
+                handle_pause_binding(recomp::InputDevice::Keyboard, InputType::Keyboard,
+                                     keyevent->keysym.scancode)) {
+                return false; // Host hotkey is not a guest/UI key.
             }
             // A paused guest no longer polls F8 bindings. Let the same
             // independent SDL event pump request the verified F8 reset.
@@ -254,6 +273,12 @@ bool sdl_event_filter(void* userdata, SDL_Event* event) {
         queue_if_enabled(event);
         break;
     case SDL_EventType::SDL_CONTROLLERBUTTONDOWN:
+#ifdef GOEMON_JP_NATIVE_F6_PAUSE_ACTIVE
+        if (handle_pause_binding(recomp::InputDevice::Controller, InputType::ControllerDigital,
+                                 event->cbutton.button)) {
+            return false;
+        }
+#endif
         if (scanning_device != recomp::InputDevice::COUNT) {
             auto menuToggleBinding0 = recomp::get_input_binding(recomp::GameInput::TOGGLE_MENU, 0, recomp::InputDevice::Controller);
             auto menuToggleBinding1 = recomp::get_input_binding(recomp::GameInput::TOGGLE_MENU, 1, recomp::InputDevice::Controller);
@@ -283,6 +308,12 @@ bool sdl_event_filter(void* userdata, SDL_Event* event) {
     case SDL_EventType::SDL_CONTROLLERAXISMOTION:
         if (scanning_device == recomp::InputDevice::Controller) {
             auto scanned_input_index = recomp::get_scanned_input_index();
+#ifdef GOEMON_JP_NATIVE_F6_PAUSE_ACTIVE
+            // A host pause binding must be a key or a controller button.
+            if (scanned_input_index == static_cast<int>(recomp::GameInput::PAUSE_GAME)) {
+                break;
+            }
+#endif
             if (scanned_input_index == static_cast<int>(recomp::GameInput::TOGGLE_MENU) ||
                 scanned_input_index == static_cast<int>(recomp::GameInput::ACCEPT_MENU) ||
                 scanned_input_index == static_cast<int>(recomp::GameInput::APPLY_MENU)) {
@@ -480,6 +511,11 @@ const recomp::DefaultN64Mappings recomp::default_n64_keyboard_mappings = {
         {.input_type = (uint32_t)InputType::Keyboard, .input_id = SDL_SCANCODE_F8}
     },
 #endif
+#ifdef GOEMON_JP_NATIVE_F6_PAUSE_ACTIVE
+    .pause_game = {
+        {.input_type = static_cast<uint32_t>(InputType::Keyboard), .input_id = SDL_SCANCODE_F6}
+    },
+#endif
 };
 
 const recomp::DefaultN64Mappings recomp::default_n64_controller_mappings = {
@@ -553,6 +589,9 @@ const recomp::DefaultN64Mappings recomp::default_n64_controller_mappings = {
     },
 #if defined(GOEMON_JAPAN_NATIVE) || defined(GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE)
     .reset_game = {},
+#endif
+#ifdef GOEMON_JP_NATIVE_F6_PAUSE_ACTIVE
+    .pause_game = {},
 #endif
 };
 

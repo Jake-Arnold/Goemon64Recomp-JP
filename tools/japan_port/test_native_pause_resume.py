@@ -58,12 +58,17 @@ class NativePauseTests(unittest.TestCase):
         section = self.input.split("bool sdl_event_filter(", 1)[1].split(
             "void recomp::handle_events()", 1)[0]
         self.assertIn("SDL_EventType::SDL_KEYDOWN", section)
-        self.assertIn("keyevent->keysym.scancode == SDL_SCANCODE_F6", section)
+        self.assertIn("handle_pause_binding(recomp::InputDevice::Keyboard", section)
+        self.assertIn("handle_pause_binding(recomp::InputDevice::Controller", section)
+        handler = self.input.split("static bool handle_pause_binding(", 1)[1].split(
+            "bool sdl_event_filter", 1)[0]
+        self.assertIn("GameInput::PAUSE_GAME", handler)
+        self.assertIn(".input_id = SDL_SCANCODE_F6", self.input)
         self.assertIn("!keyevent->repeat", section)
-        self.assertIn("jp_guest_is_paused()", section)
-        self.assertIn("jp_set_guest_paused(!paused)", section)
-        self.assertIn("jp_set_audio_paused(!paused)", section)
-        self.assertIn("if (paused || (ultramodern::is_game_started()", section)
+        self.assertIn("jp_guest_is_paused()", handler)
+        self.assertIn("jp_set_guest_paused(!paused)", handler)
+        self.assertIn("jp_set_audio_paused(!paused)", handler)
+        self.assertIn("!paused && (!ultramodern::is_game_started()", handler)
         self.assertIn("return false; // Host hotkey is not a guest/UI key.", section)
         polling = self.input.split("void recomp::poll_inputs() {", 1)[1]
         self.assertNotIn("jp_pause_was_held", polling)
@@ -71,12 +76,9 @@ class NativePauseTests(unittest.TestCase):
         self.assertNotIn("jp_set_guest_paused(!paused)", polling)
         # Inspect only the F6 branch. The full event filter correctly
         # contains a separate SDL_QUIT handler on window close.
-        f6_handler = section.split(
-            "// F6 must be handled by the host SDL event pump", 1)[1].split(
-            "// A paused guest no longer polls F8 bindings.", 1)[0]
         for forbidden in ("munmap(", "memset(", "SDL_DestroyWindow(",
                           "ultramodern::quit()", "jp_request_integrated_reset("):
-            self.assertNotIn(forbidden, f6_handler)
+            self.assertNotIn(forbidden, handler)
 
     def test_f8_while_paused_uses_host_event_pump(self):
         section = self.input.split("bool sdl_event_filter(", 1)[1].split(

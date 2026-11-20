@@ -333,7 +333,7 @@ void jp_set_audio_paused(bool pause) {
             if (saved_title.empty()) {
                 saved_title = SDL_GetWindowTitle(window);
             }
-            SDL_SetWindowTitle(window, (saved_title + " [PAUSED — F6]").c_str());
+            SDL_SetWindowTitle(window, (saved_title + " [PAUSED]").c_str());
         } else if (!saved_title.empty()) {
             SDL_SetWindowTitle(window, saved_title.c_str());
             saved_title.clear();

@@ -328,6 +328,9 @@ void assign_all_mappings(recomp::InputDevice device, const recomp::DefaultN64Map
 #if defined(GOEMON_JAPAN_NATIVE) || defined(GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE)
     assign_mapping_complete(device, recomp::GameInput::RESET_GAME, values.reset_game);
 #endif
+#ifdef GOEMON_JP_NATIVE_F6_PAUSE_ACTIVE
+    assign_mapping_complete(device, recomp::GameInput::PAUSE_GAME, values.pause_game);
+#endif
 };
 
 void goemon64::reset_input_bindings() {
