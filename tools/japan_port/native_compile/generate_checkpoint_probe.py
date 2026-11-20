@@ -158,9 +158,12 @@ goemon_finished:
 """, callees
 
 
-def generate(bodies: dict[str, list[str]], *, message_continuations: bool = False) -> str:
+def generate(bodies: dict[str, list[str]], *, message_continuations: bool = False,
+             entry_points: dict[str, str] | None = None) -> str:
     functions = {name: index for index, name in enumerate(bodies)}
-    revision_input = f"goemon-jp-checkpoint-v3:{message_continuations}\n" + "\n".join(
+    if entry_points is None:
+        entry_points = {"goemon_jp_guest_checkpoint_probe": next(iter(bodies))}
+    revision_input = f"goemon-jp-checkpoint-v4:{message_continuations}\n" + "\n".join(
         name + "\n" + "\n".join(body) for name, body in bodies.items()
     )
     revision = hashlib.sha256(revision_input.encode()).hexdigest()[:16]
@@ -202,6 +205,13 @@ def generate(bodies: dict[str, list[str]], *, message_continuations: bool = Fals
         !goemon_jp_probe_resume_message_call(rdram, &execution.state)) {
         return GOEMON_JP_CHECKPOINT_INVALID;
     }""" if message_continuations else ""
+    exports = "\n".join(f"""
+goemon_jp_checkpoint_result {symbol}(
+    uint8_t* rdram, recomp_context* ctx, const goemon_jp_guest_checkpoint* resume,
+    goemon_jp_checkpoint_callback* callback, void* user) {{
+    return run_checkpoint_probe({functions[root]}, rdram, ctx, resume, callback, user);
+}}
+""" for symbol, root in entry_points.items())
     return f"""{PROBE_HEADER}
 {prototypes}
 
@@ -221,10 +231,10 @@ static const struct {{
 {entry_text}
 }};
 
-static bool valid_checkpoint(const goemon_jp_guest_checkpoint* state) {{
+static bool valid_checkpoint(uint32_t root, const goemon_jp_guest_checkpoint* state) {{
     if (state->probe_revision != {revision_constant} ||
         state->frame_count == 0 || state->frame_count > GOEMON_JP_CHECKPOINT_MAX_FRAMES ||
-        state->frames[0].function_index != 0 ||
+        state->frames[0].function_index != root ||
         state->mips3_float_mode > 1 || state->rounding_mode > 3) {{
         return false;
     }}
@@ -246,18 +256,18 @@ static bool valid_checkpoint(const goemon_jp_guest_checkpoint* state) {{
     return true;
 }}
 
-goemon_jp_checkpoint_result goemon_jp_guest_checkpoint_probe(
-    uint8_t* rdram, recomp_context* ctx, const goemon_jp_guest_checkpoint* resume,
-    goemon_jp_checkpoint_callback* callback, void* user) {{
+static goemon_jp_checkpoint_result run_checkpoint_probe(
+    uint32_t root, uint8_t* rdram, recomp_context* ctx,
+    const goemon_jp_guest_checkpoint* resume, goemon_jp_checkpoint_callback* callback, void* user) {{
     probe_execution execution = {{
         .state = {{.probe_revision = {revision_constant}}},
         .callback = callback,
         .user = user,
     }};
     if (resume == NULL) {{
-        return functions[0].call(rdram, ctx, &execution, NULL);
+        return functions[root].call(rdram, ctx, &execution, NULL);
     }}
-    if (!valid_checkpoint(resume)) {{
+    if (!valid_checkpoint(root, resume)) {{
         return GOEMON_JP_CHECKPOINT_INVALID;
     }}
     execution.state = *resume;{resume_message}
@@ -274,7 +284,7 @@ goemon_jp_checkpoint_result goemon_jp_guest_checkpoint_probe(
     }}
     return GOEMON_JP_CHECKPOINT_FINISHED;
 }}
-"""
+{exports}"""
 
 
 def find_body(directory: Path, name: str) -> list[str]:
@@ -301,39 +311,49 @@ def find_body(directory: Path, name: str) -> list[str]:
     return body
 
 
-def instrument_root(source: Path, name: str, body: list[str], probe: str) -> str:
-    original_definition = (
-        f"RECOMP_FUNC void {name}(uint8_t* rdram, recomp_context* ctx) {{\n"
-        + "\n".join(body) + "\n;}"
-    )
+def instrument_roots(source: Path, bodies: dict[str, list[str]], entries: dict[str, str], probe: str) -> str:
     source_text = source.read_text(encoding="utf-8")
-    if source_text.count(original_definition) != 1:
-        raise ValueError(f"{source.name} does not contain the selected root function {name}")
-    wrapper = f"""RECOMP_FUNC void {name}(uint8_t* rdram, recomp_context* ctx) {{
-    const goemon_jp_checkpoint_result status =
-        goemon_jp_guest_checkpoint_probe(rdram, ctx, NULL, NULL, NULL);
+    declarations = ""
+    for symbol, name in entries.items():
+        original_definition = (
+            f"RECOMP_FUNC void {name}(uint8_t* rdram, recomp_context* ctx) {{\n"
+            + "\n".join(bodies[name]) + "\n;}"
+        )
+        if source_text.count(original_definition) != 1:
+            raise ValueError(f"{source.name} does not contain the selected root function {name}")
+        declarations += f"""goemon_jp_checkpoint_result {symbol}(
+    uint8_t*, recomp_context*, const goemon_jp_guest_checkpoint*, goemon_jp_checkpoint_callback*, void*);
+"""
+        wrapper = f"""RECOMP_FUNC void {name}(uint8_t* rdram, recomp_context* ctx) {{
+    const goemon_jp_checkpoint_result status = {symbol}(rdram, ctx, NULL, NULL, NULL);
     if (status != GOEMON_JP_CHECKPOINT_FINISHED) abort();
 }}
 """
-    return '#include "guest_checkpoint_probe.h"\n' + source_text.replace(
-        original_definition, wrapper, 1) + "\n" + probe
+        source_text = source_text.replace(original_definition, wrapper, 1)
+    return '#include "guest_checkpoint_probe.h"\n' + declarations + source_text + "\n" + probe
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--generated", required=True, type=Path)
-    parser.add_argument("--function", required=True)
+    roots = parser.add_mutually_exclusive_group(required=True)
+    roots.add_argument("--function")
+    roots.add_argument("--live-root", action="append")
     parser.add_argument("--callee", action="append", default=[])
     parser.add_argument("--message-continuations", action="store_true")
     parser.add_argument("--instrument-root-source", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     try:
-        names = dict.fromkeys([args.function, *args.callee])
+        if args.live_root and not (args.instrument_root_source and args.message_continuations):
+            raise ValueError("Live roots require an instrumented source unit and message continuations")
+        entries = ({f"goemon_jp_guest_checkpoint_probe_{root}": root for root in args.live_root}
+                   if args.live_root else {"goemon_jp_guest_checkpoint_probe": args.function})
+        names = dict.fromkeys([*entries.values(), *args.callee])
         bodies = {name: find_body(args.generated, name) for name in names}
-        result = generate(bodies, message_continuations=args.message_continuations)
+        result = generate(bodies, message_continuations=args.message_continuations, entry_points=entries)
         if args.instrument_root_source:
-            result = instrument_root(args.instrument_root_source, args.function, bodies[args.function], result)
+            result = instrument_roots(args.instrument_root_source, bodies, entries, result)
     except ValueError as error:
         parser.error(str(error))
     args.output.write_text(result, encoding="utf-8")

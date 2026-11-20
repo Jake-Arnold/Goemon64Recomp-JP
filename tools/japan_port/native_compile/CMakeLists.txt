@@ -68,6 +68,44 @@ option(GOEMON_JP_CHECKPOINT_PROBE_MESSAGES "Connect the probe to integrated gues
 if(GOEMON_JP_CHECKPOINT_PROBE_MESSAGES AND NOT GOEMON_JP_CHECKPOINT_PROBE_FUNCTION)
   message(FATAL_ERROR "Message checkpoint probes require GOEMON_JP_CHECKPOINT_PROBE_FUNCTION")
 endif()
+option(GOEMON_JP_LIVE_THREAD_CHECKPOINTS "Instrument MAIN, GAME, SCHED, and AUDIO in the Japanese preview" OFF)
+if(GOEMON_JP_LIVE_THREAD_CHECKPOINTS AND
+    (GOEMON_JP_CHECKPOINT_PROBE_FUNCTION OR GOEMON_JP_CHECKPOINT_PROBE_CALLEES OR
+     GOEMON_JP_CHECKPOINT_INSTRUMENT_ROOT_UNIT OR GOEMON_JP_CHECKPOINT_PROBE_MESSAGES))
+  message(FATAL_ERROR "The live thread preview and individual probe options are mutually exclusive")
+endif()
+
+if(GOEMON_JP_LIVE_THREAD_CHECKPOINTS)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  set(live_roots_0 func_80000580_1180 func_80000A98_1698)
+  set(live_roots_2 func_80006EDC_7ADC)
+  set(live_roots_15 func_80037D38_38938)
+  foreach(unit IN ITEMS 0 2 15)
+    set(original "${GOEMON_JAPAN_GENERATED}/funcs_${unit}.c")
+    if(NOT original IN_LIST generated_c)
+      message(FATAL_ERROR "Live checkpoint probe requires funcs_${unit}.c")
+    endif()
+    set(root_args "")
+    foreach(root IN LISTS live_roots_${unit})
+      list(APPEND root_args --live-root "${root}")
+    endforeach()
+    set(instrumented "${CMAKE_CURRENT_BINARY_DIR}/funcs_${unit}_checkpoint.c")
+    add_custom_command(
+      OUTPUT "${instrumented}"
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/generate_checkpoint_probe.py"
+        --generated "${GOEMON_JAPAN_GENERATED}" ${root_args}
+        --message-continuations --instrument-root-source "${original}" --output "${instrumented}"
+      DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/generate_checkpoint_probe.py" "${original}"
+      VERBATIM
+    )
+    set_source_files_properties("${original}" PROPERTIES HEADER_FILE_ONLY ON)
+    target_sources(GoemonRecompiledJapan PRIVATE "${instrumented}")
+  endforeach()
+  target_sources(GoemonRecompiledJapan PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/message_checkpoint_bridge.cpp")
+  target_include_directories(GoemonRecompiledJapan PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/game")
+endif()
+
 if(GOEMON_JP_CHECKPOINT_PROBE_FUNCTION)
   set(probe_functions "${GOEMON_JP_CHECKPOINT_PROBE_FUNCTION}" ${GOEMON_JP_CHECKPOINT_PROBE_CALLEES})
   foreach(func IN LISTS probe_functions)

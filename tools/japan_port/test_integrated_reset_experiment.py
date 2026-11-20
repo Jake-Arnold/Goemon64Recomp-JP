@@ -344,6 +344,15 @@ RECOMP_FUNC void entry(uint8_t* rdram, recomp_context* ctx) {
     ctx->r16 = hi + ctx->r17;
     return;
 ;}
+RECOMP_FUNC void other_entry(uint8_t* rdram, recomp_context* ctx) {
+    uint64_t hi = 0, lo = 0, result = 0;
+    int c1cs = 0;
+    hi = 13;
+    MEM_W(0, ctx->r8) += 1;
+    nested(rdram, ctx);
+    ctx->r16 = hi + ctx->r17;
+    return;
+;}
 RECOMP_FUNC void nested(uint8_t* rdram, recomp_context* ctx) {
     uint64_t hi = 0, lo = 0, result = 0;
     int c1cs = 0;
@@ -360,7 +369,7 @@ RECOMP_FUNC void nested(uint8_t* rdram, recomp_context* ctx) {
             probe_source = build / "checkpoint.c"
             subprocess.run([
                 sys.executable, str(probe_tools / "generate_checkpoint_probe.py"),
-                "--generated", str(build), "--function", "entry",
+                "--generated", str(build), "--live-root", "entry", "--live-root", "other_entry",
                 "--callee", "nested", "--message-continuations",
                 "--instrument-root-source", str(build / "funcs_0.c"), "--output", str(probe_source),
             ], check=True, cwd=ROOT, timeout=10)

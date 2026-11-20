@@ -17,7 +17,14 @@ bool jp_rearm_guest_after_verified_exit();
 }
 
 std::atomic_bool exited{false};
-extern "C" void entry(uint8_t* rdram, recomp_context* ctx);
+extern "C" {
+void entry(uint8_t* rdram, recomp_context* ctx);
+void other_entry(uint8_t* rdram, recomp_context* ctx);
+goemon_jp_checkpoint_result goemon_jp_guest_checkpoint_probe_entry(
+    uint8_t*, recomp_context*, const goemon_jp_guest_checkpoint*, goemon_jp_checkpoint_callback*, void*);
+goemon_jp_checkpoint_result goemon_jp_guest_checkpoint_probe_other_entry(
+    uint8_t*, recomp_context*, const goemon_jp_guest_checkpoint*, goemon_jp_checkpoint_callback*, void*);
+}
 
 namespace {
 
@@ -78,13 +85,14 @@ void start_probe(uint8_t* rdram, bool send) {
     cpu.r6 = OS_MESG_BLOCK;
     cpu.r7 = send;
     cpu.r8 = static_cast<std::int64_t>(marker);
-    entry(rdram, &cpu);
+    (send ? other_entry : entry)(rdram, &cpu);
     assert(cpu.r2 == 0 && cpu.r16 == 20 && cpu.r17 == 7);
 }
 
-void restore_probe(uint8_t* rdram, const goemon_jp_guest_checkpoint& checkpoint) {
+void restore_probe(uint8_t* rdram, const goemon_jp_guest_checkpoint& checkpoint, bool send = false) {
     recomp_context cpu{};
-    assert(goemon_jp_guest_checkpoint_probe(rdram, &cpu, &checkpoint, nullptr, nullptr) ==
+    const auto probe = send ? goemon_jp_guest_checkpoint_probe_other_entry : goemon_jp_guest_checkpoint_probe_entry;
+    assert(probe(rdram, &cpu, &checkpoint, nullptr, nullptr) ==
         GOEMON_JP_CHECKPOINT_FINISHED);
     assert(cpu.r2 == 0 && cpu.r16 == 20 && cpu.r17 == 7);
 }
@@ -165,7 +173,11 @@ void exercise_restored_scheduler(uint8_t* rdram) {
     assert(*TO_PTR(OSMesg, received_message) == 62);
     assert(completed_probe.frame_count == 2 && completed_probe.message.call == GOEMON_JP_MESSAGE_RETURN);
     assert(!ultramodern::jp_get_message_checkpoint(rdram, driver_thread));
-    restore_probe(rdram, completed_probe);
+    recomp_context wrong_root_cpu{};
+    assert(goemon_jp_guest_checkpoint_probe_entry(rdram, &wrong_root_cpu, &completed_probe, nullptr, nullptr) ==
+        GOEMON_JP_CHECKPOINT_INVALID);
+    assert(wrong_root_cpu.r4 == 0);
+    restore_probe(rdram, completed_probe, true);
     assert(*TO_PTR(int32_t, marker) == 2 && probe_sends == 1);
     assert(TO_PTR(OSMesgQueue, queue)->validCount == 0);
     wait_for_shutdown();
@@ -215,7 +227,7 @@ void run_thread_function(uint8_t* rdram, std::uint64_t entry, std::uint64_t, std
             goemon_jp_guest_checkpoint invalid = saved_probe;
             ++invalid.message.queue;
             recomp_context cpu{};
-            assert(goemon_jp_guest_checkpoint_probe(rdram, &cpu, &invalid, nullptr, nullptr) ==
+            assert(goemon_jp_guest_checkpoint_probe_entry(rdram, &cpu, &invalid, nullptr, nullptr) ==
                 GOEMON_JP_CHECKPOINT_INVALID);
             assert(cpu.r4 == 0);
             restore_probe(rdram, saved_probe);
@@ -259,7 +271,7 @@ int main() {
     alignas(OSThread) uint8_t restored_ram[ram_size]{};
     std::memcpy(restored_ram, saved_ram, ram_size);
     recomp_context unbound_cpu{};
-    assert(goemon_jp_guest_checkpoint_probe(restored_ram, &unbound_cpu, &saved_probe, nullptr, nullptr) ==
+    assert(goemon_jp_guest_checkpoint_probe_entry(restored_ram, &unbound_cpu, &saved_probe, nullptr, nullptr) ==
         GOEMON_JP_CHECKPOINT_INVALID);
     assert(unbound_cpu.r4 == 0 && std::memcmp(restored_ram, saved_ram, ram_size) == 0);
     run_generation(restored_ram, ProbeDriver);
