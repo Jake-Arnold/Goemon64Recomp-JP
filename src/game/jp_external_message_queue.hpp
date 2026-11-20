@@ -22,11 +22,12 @@ struct ExternalMessage {
 };
 
 // Includes messages being moved into guest RAM in the admission check.
-class ExternalMessageQueue {
+template <typename Record>
+class CheckpointQueue {
 public:
     class Delivery {
-        friend class ExternalMessageQueue;
-        explicit Delivery(ExternalMessageQueue* queue) : queue_(queue) {}
+        friend class CheckpointQueue;
+        explicit Delivery(CheckpointQueue* queue) : queue_(queue) {}
 
     public:
         Delivery(const Delivery&) = delete;
@@ -43,16 +44,16 @@ public:
         explicit operator bool() const { return queue_ != nullptr; }
 
         // A batch retains the admission count while temporarily holding retry messages.
-        bool try_dequeue(ExternalMessage& message) {
+        bool try_dequeue(Record& message) {
             std::lock_guard lock(queue_->mutex_);
             return queue_->pop_locked(message);
         }
 
     private:
-        ExternalMessageQueue* queue_;
+        CheckpointQueue* queue_;
     };
 
-    void enqueue(ExternalMessage message) {
+    void enqueue(Record message) {
         {
             std::lock_guard lock(mutex_);
             pending_.push_back(message);
@@ -66,12 +67,13 @@ public:
         return Delivery(this);
     }
 
-    [[nodiscard]] Delivery try_dequeue(ExternalMessage& message) {
+    [[nodiscard]] Delivery try_dequeue(Record& message) {
         std::lock_guard lock(mutex_);
         return take_locked(message);
     }
 
-    [[nodiscard]] Delivery wait_dequeue_timed(ExternalMessage& message, std::chrono::milliseconds timeout) {
+    template <typename Rep, typename Period>
+    [[nodiscard]] Delivery wait_dequeue_timed(Record& message, std::chrono::duration<Rep, Period> timeout) {
         std::unique_lock lock(mutex_);
         work_.wait_for(lock, timeout, [this] { return !pending_.empty(); });
         return take_locked(message);
@@ -82,17 +84,17 @@ public:
         work_.wait_for(lock, timeout, [this] { return !pending_.empty(); });
     }
 
-    [[nodiscard]] std::optional<std::vector<ExternalMessage>> try_snapshot() const {
+    [[nodiscard]] std::optional<std::vector<Record>> try_snapshot() const {
         std::lock_guard lock(mutex_);
         if (active_deliveries_ != 0) {
             return std::nullopt;
         }
-        return std::vector<ExternalMessage>(pending_.begin(), pending_.end());
+        return std::vector<Record>(pending_.begin(), pending_.end());
     }
 
     // Only the generation owner may restore, with producers and guests stopped or parked.
-    [[nodiscard]] bool restore_into_empty(std::span<const ExternalMessage> messages) {
-        std::deque<ExternalMessage> restored(messages.begin(), messages.end());
+    [[nodiscard]] bool restore_into_empty(std::span<const Record> messages) {
+        std::deque<Record> restored(messages.begin(), messages.end());
         {
             std::lock_guard lock(mutex_);
             if (active_deliveries_ != 0 || !pending_.empty()) {
@@ -115,7 +117,7 @@ public:
     }
 
 private:
-    bool pop_locked(ExternalMessage& message) {
+    bool pop_locked(Record& message) {
         if (pending_.empty()) {
             return false;
         }
@@ -124,7 +126,7 @@ private:
         return true;
     }
 
-    Delivery take_locked(ExternalMessage& message) {
+    Delivery take_locked(Record& message) {
         if (!pop_locked(message)) {
             return Delivery(nullptr);
         }
@@ -134,9 +136,11 @@ private:
 
     mutable std::mutex mutex_;
     std::condition_variable work_;
-    std::deque<ExternalMessage> pending_;
+    std::deque<Record> pending_;
     std::size_t active_deliveries_ = 0;
 };
+
+using ExternalMessageQueue = CheckpointQueue<ExternalMessage>;
 
 } // namespace goemon_jp::savestate
 

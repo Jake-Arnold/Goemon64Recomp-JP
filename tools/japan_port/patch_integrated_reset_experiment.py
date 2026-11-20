@@ -589,6 +589,57 @@ bool ultramodern::jp_rearm_timer_after_verified_exit(std::uint64_t old_generatio
 """
 
 
+TIMER_RESTORE = r"""
+bool ultramodern::jp_prepare_timer_restore(const goemon_jp::savestate::TimerCheckpoint& state,
+        uint64_t generation, std::span<const uint8_t> restored_ram) {
+    using goemon_jp::savestate::TimerCommandKind;
+    const auto publisher = jp_timer_publisher_gate.snapshot();
+    if (!publisher.open || publisher.generation != generation || publisher.in_flight != 0 ||
+            timer_context.thread.joinable() || restored_active_timers) {
+        return false;
+    }
+
+    const auto valid_timer = [&](int32_t address) {
+        constexpr uint32_t guest_base = 0x80000000;
+        const auto virtual_address = static_cast<uint32_t>(address);
+        const auto offset = virtual_address - guest_base;
+        return virtual_address >= guest_base && offset % alignof(OSTimer) == 0 &&
+            restored_ram.size() >= sizeof(OSTimer) && offset <= restored_ram.size() - sizeof(OSTimer);
+    };
+    auto active = state.active;
+    for (const auto timer : active) {
+        if (!valid_timer(timer)) return false;
+    }
+    std::vector<Action> actions;
+    actions.reserve(state.pending.size());
+    for (const auto command : state.pending) {
+        if (!valid_timer(command.address)) return false;
+        switch (command.kind) {
+            case TimerCommandKind::Add:
+                actions.emplace_back(AddTimerAction{command.address});
+                break;
+            case TimerCommandKind::Remove:
+                actions.emplace_back(RemoveTimerAction{command.address});
+                break;
+            default:
+                return false;
+        }
+    }
+
+    if (!timer_context.action_queue.restore_into_empty(actions)) {
+        return false;
+    }
+    if (!jp_timer_epoch_clock.restore_time(generation, state.clock)) {
+        (void)timer_context.action_queue.discard_after_join();
+        return false;
+    }
+    restored_active_timers = std::move(active);
+    return true;
+}
+
+"""
+
+
 def timer(src: str) -> str:
     if "jp_rearm_timer_after_verified_exit" in src:
         raise ValueError("Timer rearm already installed")
@@ -601,6 +652,52 @@ def timer(src: str) -> str:
         "void ultramodern::jp_report_timer_epoch_stage18() {\n",
         TIMER_REARM + "void ultramodern::jp_report_timer_epoch_stage18() {\n",
         "timer rearm implementation")
+    src = once(src,
+        '#include "jp_timer_epoch_clock.hpp"\n',
+        '#include "jp_timer_epoch_clock.hpp"\n'
+        '#include "jp_timer_checkpoint.hpp"\n'
+        '#include "jp_external_message_queue.hpp"\n',
+        "restorable timer queue and checkpoint types")
+    src = once(src,
+        "    moodycamel::BlockingConcurrentQueue<Action> action_queue{};\n"
+        "} timer_context;\n",
+        "    goemon_jp::savestate::CheckpointQueue<Action> action_queue;\n"
+        "} timer_context;\n"
+        "static std::optional<std::vector<int32_t>> restored_active_timers;\n",
+        "keep pending timer commands in capture order")
+    src = once(src,
+        "void timer_thread(RDRAM_ARG1) {\n",
+        "void timer_thread(RDRAM_ARG std::vector<int32_t> initial_timers) {\n",
+        "recreate the set owned by the timer worker")
+    src = once(src,
+        "    std::set<PTR(OSTimer), decltype(timer_sort)> active_timers{timer_sort};\n",
+        "    std::set<PTR(OSTimer), decltype(timer_sort)> active_timers{timer_sort};\n"
+        "    active_timers.insert(initial_timers.begin(), initial_timers.end());\n",
+        "bind restored timer addresses to new RDRAM")
+    src = once(src,
+        "void ultramodern::init_timers(RDRAM_ARG1) {\n",
+        TIMER_RESTORE + "void ultramodern::init_timers(RDRAM_ARG1) {\n",
+        "stage the checkpoint for cold timer startup")
+    src = once(src,
+        "    timer_context.thread = std::thread{ timer_thread, PASS_RDRAM1 };\n",
+        "    auto initial_timers = std::exchange(restored_active_timers, std::nullopt);\n"
+        "    if (initial_timers) {\n"
+        "        (void)jp_timer_epoch_clock.set_paused(false);\n"
+        "    }\n"
+        "    timer_context.thread = std::thread{timer_thread, PASS_RDRAM\n"
+        "        initial_timers ? std::move(*initial_timers) : std::vector<int32_t>{}};\n",
+        "start timers against the restored guest clock")
+    src = once(src,
+        "            timer_context.action_queue.wait_dequeue(cur_action);\n"
+        "            process_timer_action(cur_action);\n",
+        "            if (timer_context.action_queue.wait_dequeue_timed(cur_action, std::chrono::milliseconds{10})) {\n"
+        "                process_timer_action(cur_action);\n"
+        "            }\n",
+        "use the restorable inbox while waiting for a timer")
+    src = once(src,
+        "        while (timer_context.action_queue.try_dequeue(cur_action)) {\n",
+        "        while (auto delivery = timer_context.action_queue.try_dequeue(cur_action)) {\n",
+        "keep action admission until the timer command is applied")
     return "// Experimental integrated reset timer clock, queue and gate rearm.\n" + src
 
 

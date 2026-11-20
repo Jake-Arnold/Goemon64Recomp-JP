@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <limits>
 #include <mutex>
+#include <optional>
 
 namespace goemon_jp::reset {
 
@@ -22,6 +23,40 @@ public:
         std::uint64_t guest_time;
         TimePoint start;
     };
+
+    struct SavedTime {
+        std::uint64_t elapsed_microseconds;
+        std::uint64_t guest_time_offset;
+    };
+
+    [[nodiscard]] std::optional<SavedTime> saved_time() const noexcept {
+        std::lock_guard lock(mutex_);
+        if (!paused_) {
+            return std::nullopt;
+        }
+        const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(paused_at_ - start_).count();
+        if (elapsed < 0) {
+            return std::nullopt;
+        }
+        return SavedTime{static_cast<std::uint64_t>(elapsed), guest_time_offset_};
+    }
+
+    // Hold the restored epoch until the owner is ready to restart the workers.
+    [[nodiscard]] bool restore_time(std::uint64_t generation, const SavedTime& saved) noexcept {
+        std::lock_guard lock(mutex_);
+        const auto now = Clock::now();
+        const auto available = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+        if (generation != generation_ || paused_ || available < 0 || counter_per_ms_ == 0 ||
+            saved.elapsed_microseconds > static_cast<std::uint64_t>(available) ||
+            saved.elapsed_microseconds > std::numeric_limits<std::uint64_t>::max() / counter_per_ms_) {
+            return false;
+        }
+        start_ = now - std::chrono::microseconds{static_cast<std::int64_t>(saved.elapsed_microseconds)};
+        guest_time_offset_ = saved.guest_time_offset;
+        paused_at_ = now;
+        paused_ = true;
+        return true;
+    }
 
     explicit TimerEpochClock(std::uint64_t counter_per_ms = 46875,
                              std::uint64_t initial_generation = 1) noexcept

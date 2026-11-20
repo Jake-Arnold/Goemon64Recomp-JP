@@ -61,6 +61,7 @@ namespace recomp { bool jp_request_integrated_reset(); }
 #endif
 #ifdef GOEMON_JP_NATIVE_F6_PAUSE_ACTIVE
 #include "jp_pause_controller.hpp"
+#include "jp_timer_checkpoint.hpp"
 namespace ultramodern {
     bool jp_set_guest_paused(bool);
     bool jp_guest_is_paused();
@@ -199,6 +200,12 @@ static void preview_save_state_action(bool save) {
         std::fprintf(stderr, "[Native save-state preview] dispatch_workers_parked=%d/%d idle_parked=%d external_queue=%s\n",
                      std::popcount(parked & dispatch_mask), std::popcount(dispatch_mask),
                      (parked & idle_flag) != 0, pending.c_str());
+        if (const auto timer = ultramodern::jp_snapshot_timers()) {
+            std::fprintf(stderr, "[Native save-state preview] timer_snapshot=ready active=%zu pending=%zu\n",
+                         timer->active.size(), timer->pending.size());
+        } else {
+            std::fprintf(stderr, "[Native save-state preview] timer_snapshot=unavailable\n");
+        }
 #else
         std::fprintf(stderr, "[Native save-state preview] external_queue=%s\n", pending.c_str());
 #endif

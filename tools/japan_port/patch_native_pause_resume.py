@@ -44,6 +44,39 @@ bool ultramodern::jp_guest_is_paused() {
 """
 
 
+TIMER_SNAPSHOT = r"""
+std::optional<goemon_jp::savestate::TimerCheckpoint> ultramodern::jp_snapshot_timers() {
+    using goemon_jp::savestate::TimerCheckpoint;
+    using goemon_jp::savestate::TimerCommandKind;
+    std::optional<TimerCheckpoint> snapshot;
+    (void)goemon_jp::pause::controller().inspect_parked(goemon_jp::pause::PauseWorker::Timer, [&] {
+        const auto before = jp_timer_publisher_gate.snapshot();
+        const auto clock = jp_timer_epoch_clock.saved_time();
+        const auto actions = timer_context.action_queue.try_snapshot();
+        const auto after = jp_timer_publisher_gate.snapshot();
+        if (!clock || !actions || !after.open || before.generation != after.generation ||
+                before.in_flight != 0 || after.in_flight != 0 || before.accepted != after.accepted) {
+            return;
+        }
+        TimerCheckpoint captured{*clock, paused_active_timers, {}};
+        captured.pending.reserve(actions->size());
+        for (const auto& action : *actions) {
+            if (const auto* add = std::get_if<AddTimerAction>(&action)) {
+                captured.pending.push_back({TimerCommandKind::Add, add->timer});
+            } else if (const auto* remove = std::get_if<RemoveTimerAction>(&action)) {
+                captured.pending.push_back({TimerCommandKind::Remove, remove->timer});
+            } else {
+                return; // A shutdown action belongs to the old generation.
+            }
+        }
+        snapshot = std::move(captured);
+    });
+    return snapshot;
+}
+
+"""
+
+
 def timer(src: str) -> str:
     if "jp_set_guest_paused(" in src:
         raise ValueError("Timer source already paused")
@@ -60,21 +93,31 @@ def timer(src: str) -> str:
         "clock+pause controller includes")
     src = once(src,
         'void ultramodern::jp_report_timer_epoch_stage18() {\n',
-        PAUSE_TIMER_API + 'void ultramodern::jp_report_timer_epoch_stage18() {\n',
+        PAUSE_TIMER_API + TIMER_SNAPSHOT + 'void ultramodern::jp_report_timer_epoch_stage18() {\n',
         "host pause state and clock setter")
+    src = once(src,
+        'void timer_thread(RDRAM_ARG std::vector<int32_t> initial_timers) {\n',
+        '// Accessed only under the pause controller lock while the timer is parked.\n'
+        'static std::vector<int32_t> paused_active_timers;\n\n'
+        'void timer_thread(RDRAM_ARG std::vector<int32_t> initial_timers) {\n',
+        "publish the timer owner's active addresses alongside pause acknowledgement")
     src = once(src,
         '    while (!shutdown_requested) {\n'
         '        // Empty the action queue\n',
         '    while (!shutdown_requested) {\n'
         '        // Timer actions and messages remain pending during pause.\n'
         '        // Exit/reset first releases the gate so shutdown is still joined.\n'
-        '        (void)goemon_jp::pause::controller().wait_if_paused(exited, goemon_jp::pause::PauseWorker::Timer);\n'
+        '        (void)goemon_jp::pause::controller().wait_with_snapshot(\n'
+        '            exited, goemon_jp::pause::PauseWorker::Timer, [&] {\n'
+        '                paused_active_timers.assign(active_timers.begin(), active_timers.end());\n'
+        '            });\n'
         '        // Empty the action queue\n',
         "timer worker safe boundary")
     src = once(src,
         '        while (active_timers.empty() && !shutdown_requested) {\n'
-        '            timer_context.action_queue.wait_dequeue(cur_action);\n'
-        '            process_timer_action(cur_action);\n'
+        '            if (timer_context.action_queue.wait_dequeue_timed(cur_action, std::chrono::milliseconds{10})) {\n'
+        '                process_timer_action(cur_action);\n'
+        '            }\n'
         '        }\n'
         '        if (shutdown_requested) {\n'
         '            break;\n'

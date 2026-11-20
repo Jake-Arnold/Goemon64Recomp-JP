@@ -76,6 +76,14 @@ public:
     [[nodiscard]] bool wait_if_paused(
         const std::atomic_bool& process_exiting,
         PauseWorker worker = PauseWorker::Untracked) noexcept {
+        return wait_with_snapshot(process_exiting, worker, [] {});
+    }
+
+    // Capture worker-owned state before publishing its acknowledgement, once
+    // per pause. The callback and the inspector share the controller lock.
+    template <typename Capture>
+    [[nodiscard]] bool wait_with_snapshot(
+        const std::atomic_bool& process_exiting, PauseWorker worker, Capture capture) {
         if (!is_paused()) {
             return !process_exiting.load(std::memory_order_acquire);
         }
@@ -83,11 +91,24 @@ public:
         const auto flag = static_cast<std::uint32_t>(worker);
         while (paused_.load(std::memory_order_acquire) &&
                !process_exiting.load(std::memory_order_acquire)) {
-            parked_workers_ |= flag;
+            if (flag != 0 && (parked_workers_ & flag) == 0) {
+                capture();
+                parked_workers_ |= flag;
+            }
             cv_.wait_for(lock, std::chrono::milliseconds{10});
         }
         parked_workers_ &= ~flag;
         return !process_exiting.load(std::memory_order_acquire);
+    }
+
+    template <typename Inspect>
+    [[nodiscard]] bool inspect_parked(PauseWorker worker, Inspect inspect) const {
+        std::lock_guard lock(mutex_);
+        if ((parked_workers_ & static_cast<std::uint32_t>(worker)) == 0) {
+            return false;
+        }
+        inspect();
+        return true;
     }
 
 private:

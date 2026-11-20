@@ -8,6 +8,7 @@
 #include "jp_message_continuation.hpp"
 #include "jp_external_message_queue.hpp"
 #include "jp_pause_controller.hpp"
+#include "jp_timer_checkpoint.hpp"
 #include "jp_guest_checkpoint_status.hpp"
 #include "ultramodern/ultramodern.hpp"
 
@@ -18,6 +19,9 @@ bool wait_for_guest_joins_for_future_reset(std::uint32_t timeout_ms);
 bool jp_rearm_guest_after_verified_exit();
 bool jp_flush_external_messages_after_join(std::uint64_t generation);
 bool jp_rearm_external_messages_after_verified_exit(std::uint64_t generation);
+bool jp_rearm_timer_after_verified_exit(std::uint64_t generation);
+bool jp_set_guest_paused(bool pause);
+void shutdown_timers();
 }
 
 std::atomic_bool exited{false};
@@ -394,6 +398,67 @@ static void test_external_queue_admission() {
     assert(messages.try_dequeue(received) && received == second);
 }
 
+static void test_timer_restore() {
+    constexpr auto active = guest_address(0x100);
+    constexpr auto cancelled = guest_address(0x180);
+    constexpr auto pending = guest_address(0x200);
+    constexpr OSTime ticks_per_millisecond = 46875;
+    alignas(OSThread) uint8_t original[ram_size]{};
+    alignas(OSThread) uint8_t restored[ram_size]{};
+
+    exited.store(false);
+    ultramodern::init_timers(original);
+    assert(!ultramodern::jp_snapshot_timers());
+    osSetTime(50'000'000);
+    assert(osSetTimer(original, active, 260 * ticks_per_millisecond, 0, queue, 41) == 0);
+    assert(osSetTimer(original, cancelled, 400 * ticks_per_millisecond, 0, queue, 99) == 0);
+    std::this_thread::sleep_for(35ms);
+
+    assert(ultramodern::jp_set_guest_paused(true));
+    const auto limit = std::chrono::steady_clock::now() + 2s;
+    std::optional<goemon_jp::savestate::TimerCheckpoint> snapshot;
+    while (std::chrono::steady_clock::now() < limit) {
+        snapshot = ultramodern::jp_snapshot_timers();
+        if (snapshot) break;
+        std::this_thread::sleep_for(1ms);
+    }
+    assert(snapshot && snapshot->active.size() == 2 && snapshot->pending.empty());
+    assert(osSetTimer(original, pending, 100 * ticks_per_millisecond, 0, queue, 40) == 0);
+    assert(osStopTimer(original, cancelled) == 0);
+    snapshot = ultramodern::jp_snapshot_timers();
+    assert(snapshot && snapshot->pending.size() == 2);
+    const auto saved_count = osGetCount();
+    const auto saved_time = osGetTime();
+    std::memcpy(restored, original, ram_size);
+
+    std::this_thread::sleep_for(450ms);
+    assert(osGetTime() == saved_time && osGetCount() == saved_count);
+    assert(ultramodern::jp_set_guest_paused(false));
+    ultramodern::shutdown_timers();
+    assert(ultramodern::jp_rearm_timer_after_verified_exit(1));
+    assert(!ultramodern::jp_prepare_timer_restore(*snapshot, 1, restored));
+    auto bad = *snapshot;
+    bad.active[0] = guest_address(ram_size);
+    assert(!ultramodern::jp_prepare_timer_restore(bad, 2, restored));
+    assert(ultramodern::jp_prepare_timer_restore(*snapshot, 2, restored));
+    assert(osGetCount() == saved_count && osGetTime() == saved_time);
+    assert(!ultramodern::jp_prepare_timer_restore(*snapshot, 2, restored));
+
+    const auto started = std::chrono::steady_clock::now();
+    ultramodern::init_timers(restored);
+    assert(ultramodern::jp_snapshot_external_messages()->empty());
+    while (std::chrono::steady_clock::now() - started < 700ms) {
+        if (!ultramodern::jp_snapshot_external_messages()->empty()) break;
+        std::this_thread::sleep_for(1ms);
+    }
+    assert(std::chrono::steady_clock::now() - started >= 90ms);
+    std::this_thread::sleep_until(started + 520ms);
+    ultramodern::shutdown_timers();
+    const auto messages = ultramodern::jp_snapshot_external_messages();
+    assert(messages && messages->size() == 2);
+    assert((*messages)[0].mesg == 40 && (*messages)[1].mesg == 41);
+}
+
 int main() {
     test_external_queue_admission();
     alignas(OSThread) uint8_t original_ram[ram_size]{};
@@ -409,4 +474,5 @@ int main() {
     assert(unbound_cpu.r4 == 0 && std::memcmp(restored_ram, saved_ram, ram_size) == 0);
     run_generation(restored_ram, ProbeDriver);
     test_idle_restore();
+    test_timer_restore();
 }

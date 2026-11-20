@@ -298,7 +298,7 @@ class IntegratedResetTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "already"):
                     transform(result)
 
-        if all(key in composed for key in ("scheduler", "threads", "messages")):
+        if all(key in composed for key in ("scheduler", "threads", "messages", "timer")):
             scheduling = stage9.stage8.stage6.stage5.instrument_scheduler(
                 (runtime / "ultramodern/src/scheduling.cpp").read_text(encoding="utf-8"))
             pause = module("jp_pause_for_message_test", "patch_native_pause_resume.py")
@@ -306,6 +306,7 @@ class IntegratedResetTests(unittest.TestCase):
                 "threadqueue.cpp": composed["scheduler"],
                 "threads.cpp": pause.threads(composed["threads"]),
                 "mesgqueue.cpp": pause.messages(composed["messages"]),
+                "timer.cpp": pause.timer(composed["timer"]),
                 "scheduling.cpp": scheduling,
             })
 
