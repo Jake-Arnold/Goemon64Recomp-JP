@@ -1,4 +1,5 @@
 #include <atomic>
+#include <bit>
 #include <cstdio>
 #include <mutex>
 #include <utility>
@@ -55,9 +56,11 @@ namespace ultramodern { void jp_report_timer_epoch_stage18(); }
 #endif
 #ifdef GOEMON_JP_EXPERIMENTAL_RESET_BACKEND_ACTIVE
 #include "jp_guest_checkpoint_status.hpp"
+#include "jp_external_message_queue.hpp"
 namespace recomp { bool jp_request_integrated_reset(); }
 #endif
 #ifdef GOEMON_JP_NATIVE_F6_PAUSE_ACTIVE
+#include "jp_pause_controller.hpp"
 namespace ultramodern {
     bool jp_set_guest_paused(bool);
     bool jp_guest_is_paused();
@@ -187,6 +190,18 @@ static void preview_save_state_action(bool save) {
         status += ")";
         std::fprintf(stderr, "[Native save-state preview] slot=%d %s; waiting=%u unstarted=%u\n",
                      recomp::get_save_slot(), status.c_str(), coverage.message_checkpoints, coverage.not_started);
+        const auto external = ultramodern::jp_snapshot_external_messages();
+        const auto pending = external ? std::to_string(external->size()) : std::string("delivery in progress");
+#ifdef GOEMON_JP_NATIVE_F6_PAUSE_ACTIVE
+        const auto parked = goemon_jp::pause::controller().parked_workers();
+        const auto dispatch_mask = goemon_jp::pause::native_dispatch_mask;
+        const auto idle_flag = static_cast<std::uint32_t>(goemon_jp::pause::PauseWorker::IdleGuest);
+        std::fprintf(stderr, "[Native save-state preview] dispatch_workers_parked=%d/%d idle_parked=%d external_queue=%s\n",
+                     std::popcount(parked & dispatch_mask), std::popcount(dispatch_mask),
+                     (parked & idle_flag) != 0, pending.c_str());
+#else
+        std::fprintf(stderr, "[Native save-state preview] external_queue=%s\n", pending.c_str());
+#endif
     } else {
         status += " (native restore incomplete)";
         std::fprintf(stderr, "[Native save-state preview] slot=%d %s\n", recomp::get_save_slot(), status.c_str());

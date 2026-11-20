@@ -33,20 +33,14 @@ bool ultramodern::jp_flush_external_messages_after_join(std::uint64_t generation
             std::chrono::milliseconds{500})) {
         return false;
     }
-    QueuedMessage old;
-    std::uint64_t removed = 0;
-    while (external_messages.try_dequeue(old)) {
-        ++removed;
-    }
-    // Keep producer admission CLOSED until the old RDRAM is actually
-    // unmapped and all other generation-local subsystems have rearmed.
-    if (external_messages.size_approx() != 0) {
+    const auto removed = external_messages.discard_after_join();
+    if (!removed) {
         return false;
     }
     std::fprintf(stderr,
         "[Goemon JP integrated reset] external_queue_drained=1 removed=%llu "
         "generation=%llu; no stale OSMesgQueue pointers.\n",
-        static_cast<unsigned long long>(removed),
+        static_cast<unsigned long long>(*removed),
         static_cast<unsigned long long>(generation));
     return true;
 }
@@ -55,11 +49,20 @@ bool ultramodern::jp_flush_external_messages_after_join(std::uint64_t generation
 // verified old RDRAM unmap and ALL other subsystem rearm checks.
 bool ultramodern::jp_rearm_external_messages_after_verified_exit(
         std::uint64_t old_generation) {
-    if (external_messages.size_approx() != 0) {
+    const auto snapshot = external_messages.try_snapshot();
+    if (!snapshot || !snapshot->empty()) {
         return false;
     }
     return jp_external_message_gate.rearm_after_verified_exit(
         old_generation, true);
+}
+
+std::optional<std::vector<goemon_jp::savestate::ExternalMessage>> ultramodern::jp_snapshot_external_messages() {
+    return external_messages.try_snapshot();
+}
+
+bool ultramodern::jp_restore_external_messages(std::span<const goemon_jp::savestate::ExternalMessage> messages) {
+    return external_messages.restore_into_empty(messages);
 }
 
 """
@@ -98,17 +101,20 @@ IDLE_MESSAGE_LOOP = r"""
 [[noreturn]] void ultramodern::jp_idle_message_loop(uint8_t* rdram) {
     for (;;) {
         ultramodern::guest_shutdown_checkpoint();
+        {
+            const MessageContinuationScope continuation(rdram, {MessageCall::IdleWait, 0, 0});
+            external_messages.wait_for_work(std::chrono::milliseconds{10});
+        }
+        ultramodern::guest_shutdown_checkpoint();
         QueuedMessage message;
         {
-            std::unique_lock lock(idle_wakeup_mutex);
-            if (!external_messages.try_dequeue(message)) {
-                const MessageContinuationScope continuation(rdram, {MessageCall::IdleWait, 0, 0});
-                idle_wakeup.wait_for(lock, std::chrono::milliseconds{10});
+            auto delivery = external_messages.try_dequeue(message);
+            if (!delivery) {
                 continue;
             }
-        }
-        if (!do_send(rdram, message.mq, message.mesg, message.jam, false) && message.requeue_if_blocked) {
-            external_messages.enqueue(message);
+            if (!do_send(rdram, message.mq, message.mesg, message.jam, false) && message.requeue_if_blocked) {
+                external_messages.enqueue(message);
+            }
         }
         ultramodern::check_running_queue(rdram);
     }
@@ -158,20 +164,24 @@ def messages(src: str) -> str:
         '#include "ultramodern/ultramodern.hpp"\n'
         '#include "jp_generation_publisher_gate.hpp"\n'
         '#include "jp_message_continuation.hpp"\n'
-        '#include <condition_variable>\n'
-        '#include <mutex>\n'
+        '#include "jp_external_message_queue.hpp"\n'
         'namespace ultramodern { bool guest_shutdown_requested_for_future_reset(); }\n'
         '#include <cstdio>\n',
         "external message gate include")
     src = once(src,
+        "struct QueuedMessage {\n"
+        "    PTR(OSMesgQueue) mq;\n"
+        "    OSMesg mesg;\n"
+        "    bool jam;\n"
+        "    bool requeue_if_blocked;\n"
+        "};\n\n"
         "static moodycamel::BlockingConcurrentQueue<QueuedMessage> external_messages {};\n",
-        "static moodycamel::BlockingConcurrentQueue<QueuedMessage> external_messages {};\n"
-        "static std::mutex idle_wakeup_mutex;\n"
-        "static std::condition_variable idle_wakeup;\n"
+        "using QueuedMessage = goemon_jp::savestate::ExternalMessage;\n"
+        "static goemon_jp::savestate::ExternalMessageQueue external_messages;\n"
         "namespace ultramodern { bool jp_flush_external_messages_after_join(std::uint64_t); }\n"
         "namespace ultramodern { bool jp_rearm_external_messages_after_verified_exit(std::uint64_t); }\n"
         + EXTERNAL_QUEUE_FENCE,
-        "external queue close, drain and rearm")
+        "use a restorable FIFO with delivery admission")
     src = once(src,
         "void ultramodern::enqueue_external_message(PTR(OSMesgQueue) mq, OSMesg msg, bool jam, bool requeue_if_blocked) {\n",
         "void ultramodern::enqueue_external_message(PTR(OSMesgQueue) mq, OSMesg msg, bool jam, bool requeue_if_blocked) {\n"
@@ -204,13 +214,38 @@ def messages(src: str) -> str:
             raise ValueError(f"Unexpected return sites for {result_name} message operations")
         src = src.replace(ending, f"    return finish_message_call(PASS_RDRAM {result_name});\n")
     src = once(src,
-        "    external_messages.enqueue({mq, msg, jam, requeue_if_blocked});\n",
-        "    {\n"
-        "        std::lock_guard lock(idle_wakeup_mutex);\n"
-        "        if (!external_messages.enqueue({mq, msg, jam, requeue_if_blocked})) return;\n"
+        "    while (external_messages.try_dequeue(to_send)) {\n",
+        "    auto batch = external_messages.begin_batch();\n"
+        "    while (batch.try_dequeue(to_send)) {\n",
+        "retain delivery admission across guest RAM writes and requeued messages")
+    src = once(src,
+        "    while (!external_messages.wait_dequeue_timed(\n"
+        "        to_send, std::chrono::milliseconds{10})) {\n"
+        "        jp_external_waits.fetch_add(1, std::memory_order_relaxed);\n"
+        "        ultramodern::guest_shutdown_checkpoint();\n"
         "    }\n"
-        "    idle_wakeup.notify_one();\n",
-        "wake IDLE for a published external message without removing it")
+        "    ultramodern::guest_shutdown_checkpoint();\n"
+        "    if (!do_send(PASS_RDRAM to_send.mq, to_send.mesg, to_send.jam, false) && to_send.requeue_if_blocked) {\n"
+        "        external_messages.enqueue(to_send);\n"
+        "    }\n",
+        "    for (;;) {\n"
+        "        auto delivery = external_messages.wait_dequeue_timed(to_send, std::chrono::milliseconds{10});\n"
+        "        if (!delivery) {\n"
+        "            jp_external_waits.fetch_add(1, std::memory_order_relaxed);\n"
+        "            ultramodern::guest_shutdown_checkpoint();\n"
+        "            continue;\n"
+        "        }\n"
+        "        ultramodern::guest_shutdown_checkpoint();\n"
+        "        if (!do_send(PASS_RDRAM to_send.mq, to_send.mesg, to_send.jam, false) && to_send.requeue_if_blocked) {\n"
+        "            external_messages.enqueue(to_send);\n"
+        "        }\n"
+        "        return;\n"
+        "    }\n",
+        "hold a delivery permit across a blocking external message transfer")
+    src = once(src,
+        "    if (external_messages.wait_dequeue_timed(to_send, std::chrono::milliseconds{millis})) {\n",
+        "    if (auto delivery = external_messages.wait_dequeue_timed(to_send, std::chrono::milliseconds{millis}); delivery) {\n",
+        "hold a delivery permit across a timed external message transfer")
     src += IDLE_MESSAGE_LOOP + RESUME_MESSAGE_CALL
     return "// Experimental reset external message queue generation fence.\n" + src
 

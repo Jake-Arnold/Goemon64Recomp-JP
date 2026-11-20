@@ -6,6 +6,8 @@
 
 #include "guest_checkpoint_probe.h"
 #include "jp_message_continuation.hpp"
+#include "jp_external_message_queue.hpp"
+#include "jp_pause_controller.hpp"
 #include "jp_guest_checkpoint_status.hpp"
 #include "ultramodern/ultramodern.hpp"
 
@@ -14,6 +16,8 @@ void guest_shutdown_checkpoint();
 void request_guest_shutdown_for_future_reset();
 bool wait_for_guest_joins_for_future_reset(std::uint32_t timeout_ms);
 bool jp_rearm_guest_after_verified_exit();
+bool jp_flush_external_messages_after_join(std::uint64_t generation);
+bool jp_rearm_external_messages_after_verified_exit(std::uint64_t generation);
 }
 
 std::atomic_bool exited{false};
@@ -272,6 +276,8 @@ void run_thread_function(uint8_t* rdram, std::uint64_t entry, std::uint64_t, std
         case ConsumeExternal:
             assert(osRecvMesg(rdram, queue, received_message, OS_MESG_BLOCK) == 0);
             assert(*TO_PTR(OSMesg, received_message) == 73);
+            assert(osRecvMesg(rdram, queue, received_message, OS_MESG_BLOCK) == 0);
+            assert(*TO_PTR(OSMesg, received_message) == 74);
             wait_for_shutdown();
             break;
     }
@@ -294,6 +300,7 @@ static void wait_for_finished() {
 
 static void end_generation() {
     ultramodern::request_guest_shutdown_for_future_reset();
+    (void)goemon_jp::pause::controller().set_paused(false);
     assert(ultramodern::wait_for_guest_joins_for_future_reset(2000));
     exited.store(true);
     ultramodern::join_thread_cleaner_thread();
@@ -317,22 +324,43 @@ static goemon_jp_guest_checkpoint wait_for_idle(uint8_t* rdram) {
     std::abort();
 }
 
+static void pause_idle_at_boundary() {
+    auto& controller = goemon_jp::pause::controller();
+    const auto idle_flag = static_cast<std::uint32_t>(goemon_jp::pause::PauseWorker::IdleGuest);
+    assert(controller.set_paused(true));
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    while ((controller.parked_workers() & idle_flag) == 0 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(1ms);
+    }
+    assert((controller.parked_workers() & idle_flag) != 0);
+}
+
 static void test_idle_restore() {
     assert(ultramodern::jp_rearm_guest_after_verified_exit());
     alignas(OSThread) uint8_t idle_ram[ram_size]{};
     osCreateMesgQueue(idle_ram, queue, messages, 2);
     begin_generation(idle_ram, StartIdle);
     saved_idle = wait_for_idle(idle_ram);
-    // The fixture has no native producers while copying RAM. Its other
-    // guest is blocked on the input queue and IDLE has no message to deliver.
+    pause_idle_at_boundary();
+    ultramodern::enqueue_external_message(queue, 73, false, false);
+    ultramodern::enqueue_external_message(queue, 74, false, false);
+    const auto pending = ultramodern::jp_snapshot_external_messages();
+    assert(pending && pending->size() == 2);
+    assert((*pending)[0].mesg == 73 && (*pending)[1].mesg == 74);
+    // No producers run during the RAM copy. The consumer and IDLE are parked.
     alignas(OSThread) uint8_t idle_restore_ram[ram_size]{};
     std::memcpy(idle_restore_ram, idle_ram, ram_size);
     end_generation();
+    assert(ultramodern::jp_flush_external_messages_after_join(1));
+    assert(ultramodern::jp_rearm_external_messages_after_verified_exit(1));
     assert(ultramodern::jp_rearm_guest_after_verified_exit());
 
     begin_generation(idle_restore_ram, RestoreIdle);
     assert(wait_for_idle(idle_restore_ram).probe_revision == saved_idle.probe_revision);
-    ultramodern::enqueue_external_message(queue, 73, false, false);
+    pause_idle_at_boundary();
+    assert(ultramodern::jp_restore_external_messages(*pending));
+    assert(!ultramodern::jp_restore_external_messages(*pending));
+    assert(goemon_jp::pause::controller().set_paused(false));
     wait_for_finished();
     end_generation();
     uint8_t* rdram = idle_restore_ram;
@@ -340,7 +368,34 @@ static void test_idle_restore() {
     assert(TO_PTR(OSMesgQueue, queue)->validCount == 0);
 }
 
+static void test_external_queue_admission() {
+    using namespace goemon_jp::savestate;
+    ExternalMessageQueue messages;
+    const ExternalMessage first{queue, 1, false, true};
+    const ExternalMessage second{queue, 2, true, false};
+    messages.enqueue(first);
+    messages.enqueue(second);
+    ExternalMessage received{};
+    {
+        auto delivery = messages.try_dequeue(received);
+        assert(delivery && received == first);
+        assert(!messages.try_snapshot());
+        assert(!messages.discard_after_join());
+    }
+    const auto pending = messages.try_snapshot();
+    assert(pending && *pending == std::vector<ExternalMessage>{second});
+    {
+        auto batch = messages.begin_batch();
+        assert(batch.try_dequeue(received) && received == second);
+        assert(!messages.restore_into_empty(*pending));
+        assert(!messages.try_snapshot());
+    }
+    assert(messages.restore_into_empty(*pending));
+    assert(messages.try_dequeue(received) && received == second);
+}
+
 int main() {
+    test_external_queue_admission();
     alignas(OSThread) uint8_t original_ram[ram_size]{};
     run_generation(original_ram, Driver);
     assert(ultramodern::jp_rearm_guest_after_verified_exit());

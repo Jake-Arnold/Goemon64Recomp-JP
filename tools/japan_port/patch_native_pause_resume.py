@@ -51,6 +51,7 @@ def timer(src: str) -> str:
         '#include "jp_timer_epoch_clock.hpp"\n',
         '#include "jp_timer_epoch_clock.hpp"\n'
         '#include "jp_pause_controller.hpp"\n'
+        '#include <algorithm>\n'
         'extern std::atomic_bool exited;\n'
         'namespace ultramodern {\n'
         '    bool jp_set_guest_paused(bool);\n'
@@ -67,24 +68,41 @@ def timer(src: str) -> str:
         '    while (!shutdown_requested) {\n'
         '        // Timer actions and messages remain pending during pause.\n'
         '        // Exit/reset first releases the gate so shutdown is still joined.\n'
-        '        (void)goemon_jp::pause::controller().wait_if_paused(exited);\n'
+        '        (void)goemon_jp::pause::controller().wait_if_paused(exited, goemon_jp::pause::PauseWorker::Timer);\n'
         '        // Empty the action queue\n',
         "timer worker safe boundary")
+    src = once(src,
+        '        while (active_timers.empty() && !shutdown_requested) {\n'
+        '            timer_context.action_queue.wait_dequeue(cur_action);\n'
+        '            process_timer_action(cur_action);\n'
+        '        }\n'
+        '        if (shutdown_requested) {\n'
+        '            break;\n'
+        '        }\n',
+        '        if (active_timers.empty()) {\n'
+        '            if (timer_context.action_queue.wait_dequeue_timed(cur_action, std::chrono::milliseconds{10})) {\n'
+        '                process_timer_action(cur_action);\n'
+        '            }\n'
+        '            continue;\n'
+        '        }\n',
+        "allow an empty timer worker to acknowledge the pause")
+    src = once(src,
+        '        if (wait_duration.count() >= 0 && timer_context.action_queue.wait_dequeue_timed(cur_action, wait_duration)) {\n',
+        '        const auto maximum_wait = std::chrono::duration_cast<decltype(wait_duration)>(std::chrono::milliseconds{10});\n'
+        '        if (wait_duration.count() >= 0 && timer_context.action_queue.wait_dequeue_timed(\n'
+        '                cur_action, std::min(wait_duration, maximum_wait))) {\n',
+        "bound the timer wait without altering guest time")
     src = once(src,
         '        else {\n'
         '            // Waiting for the timer completed, so send the timer\'s message to its message queue\n',
         '        else {\n'
-        '            // A timed dequeue uses host wall-time. If F6 paused\n'
-        '            // mid-wait, never deliver early after resume: compare\n'
-        '            // against the shifted guest-time deadline again.\n'
-        '            (void)goemon_jp::pause::controller().wait_if_paused(exited);\n'
-        '            if (!exited.load(std::memory_order_acquire) &&\n'
-        '                time_now() < cur_timer->timestamp) {\n'
+        '            // Reinsert a timer before parking, or after a bounded wait before its deadline.\n'
+        '            if (goemon_jp::pause::controller().is_paused() || time_now() < cur_timer->timestamp) {\n'
         '                active_timers.insert(cur_timer_);\n'
         '                continue;\n'
         '            }\n'
         '            // Waiting for the timer completed, so send the timer\'s message to its message queue\n',
-        "timer interrupt delivery with clock deadline recheck")
+        "park only after returning a pending timer to the queue")
     return "// JP F6 cooperative pause: timer worker, guest clock and N64 time.\n" + src
 
 
@@ -100,42 +118,28 @@ def events(src: str) -> str:
         '    while (!exited) {\n'
         '        // Determine the next VI time',
         '    while (!exited) {\n'
-        '        if (!goemon_jp::pause::controller().wait_if_paused(exited)) break;\n'
+        '        if (!goemon_jp::pause::controller().wait_if_paused(exited, goemon_jp::pause::PauseWorker::Vi)) break;\n'
         '        // Determine the next VI time',
         "VI frame boundary")
     src = once(src,
         '        ultramodern::sleep_until(next);\n'
         '        auto time_now = ultramodern::time_since_start();\n',
         '        ultramodern::sleep_until(next);\n'
-        '        if (!goemon_jp::pause::controller().wait_if_paused(exited)) break;\n'
+        '        if (!goemon_jp::pause::controller().wait_if_paused(exited, goemon_jp::pause::PauseWorker::Vi)) break;\n'
         '        auto time_now = ultramodern::time_since_start();\n',
         "VI frame dispatch after wall-clock sleep")
     src = once(src,
-        '        if (task == nullptr) {\n'
-        '            return;\n'
-        '        }\n\n'
-        '        if (!ultramodern::rsp::run_task',
-        '        if (task == nullptr) {\n'
-        '            return;\n'
-        '        }\n'
-        '        // Keep existing RSP tasks queued while paused.\n'
-        '        (void)goemon_jp::pause::controller().wait_if_paused(exited);\n\n'
-        '        if (!ultramodern::rsp::run_task',
+        '        events_context.sp_task_queue.wait_dequeue(task);\n',
+        '        (void)goemon_jp::pause::controller().wait_if_paused(exited, goemon_jp::pause::PauseWorker::Rsp);\n'
+        '        if (!events_context.sp_task_queue.wait_dequeue_timed(task, std::chrono::milliseconds{10})) continue;\n',
         "SP task execution checkpoint")
     src = once(src,
         '    while (!exited) {\n'
         '        // Try to pull an action from the queue\n',
         '    while (!exited) {\n'
-        '        if (!goemon_jp::pause::controller().wait_if_paused(exited)) break;\n'
+        '        if (!goemon_jp::pause::controller().wait_if_paused(exited, goemon_jp::pause::PauseWorker::Graphics)) break;\n'
         '        // Try to pull an action from the queue\n',
         "graphics action loop boundary")
-    src = once(src,
-        '        if (events_context.action_queue.wait_dequeue_timed(action, 1ms)) {\n'
-        '            // Determine the action type and act on it\n',
-        '        if (events_context.action_queue.wait_dequeue_timed(action, 1ms)) {\n'
-        '            if (!goemon_jp::pause::controller().wait_if_paused(exited)) break;\n'
-        '            // Determine the action type and act on it\n',
-        "graphics action dispatch checkpoint")
     return "// JP F6 cooperative pause: preserve last VI/frame/RSP and renderer.\n" + src
 
 
@@ -161,17 +165,22 @@ def messages(src: str) -> str:
         '    (void)goemon_jp::pause::controller().wait_if_paused(exited);\n',
         "guest message wait entry checkpoint")
     src = once(src,
-        '    ultramodern::guest_shutdown_checkpoint();\n'
-        '    if (!do_send(PASS_RDRAM to_send.mq, to_send.mesg, to_send.jam, false)',
-        '    ultramodern::guest_shutdown_checkpoint();\n'
-        '    (void)goemon_jp::pause::controller().wait_if_paused(exited);\n'
-        '    if (!do_send(PASS_RDRAM to_send.mq, to_send.mesg, to_send.jam, false)',
-        "external message wake checkpoint")
-    src = once(src,
-        '    if (external_messages.wait_dequeue_timed(to_send, std::chrono::milliseconds{millis})) {\n'
-        '        ultramodern::guest_shutdown_checkpoint();\n',
-        '    if (external_messages.wait_dequeue_timed(to_send, std::chrono::milliseconds{millis})) {\n'
         '        ultramodern::guest_shutdown_checkpoint();\n'
+        '        if (!do_send(PASS_RDRAM to_send.mq, to_send.mesg, to_send.jam, false) && to_send.requeue_if_blocked) {\n'
+        '            external_messages.enqueue(to_send);\n'
+        '        }\n'
+        '        return;\n',
+        '        ultramodern::guest_shutdown_checkpoint();\n'
+        '        (void)goemon_jp::pause::controller().wait_if_paused(exited);\n'
+        '        if (!do_send(PASS_RDRAM to_send.mq, to_send.mesg, to_send.jam, false) && to_send.requeue_if_blocked) {\n'
+        '            external_messages.enqueue(to_send);\n'
+        '        }\n'
+        '        return;\n',
+        "external message wake checkpoint")
+    timed_wait = '    if (auto delivery = external_messages.wait_dequeue_timed(to_send, std::chrono::milliseconds{millis}); delivery) {\n'
+    src = once(src,
+        timed_wait + '        ultramodern::guest_shutdown_checkpoint();\n',
+        timed_wait + '        ultramodern::guest_shutdown_checkpoint();\n'
         '        (void)goemon_jp::pause::controller().wait_if_paused(exited);\n',
         "timed message wake checkpoint")
     src = once(src,
@@ -181,9 +190,14 @@ def messages(src: str) -> str:
         '    for (;;) {\n'
         '        {\n'
         '            const MessageContinuationScope continuation(rdram, {MessageCall::IdleWait, 0, 0});\n'
-        '            (void)goemon_jp::pause::controller().wait_if_paused(exited);\n'
+        '            (void)goemon_jp::pause::controller().wait_if_paused(exited, goemon_jp::pause::PauseWorker::IdleGuest);\n'
         '        }\n',
         "pause IDLE at the boundary before it consumes a message")
+    src = once(src,
+        '            external_messages.wait_for_work(std::chrono::milliseconds{10});\n',
+        '            external_messages.wait_for_work(std::chrono::milliseconds{10});\n'
+        '            (void)goemon_jp::pause::controller().wait_if_paused(exited, goemon_jp::pause::PauseWorker::IdleGuest);\n',
+        "acknowledge a pause that lands while IDLE is waiting")
     return "// JP F6 cooperative pause: external message delivery to guest memory.\n" + src
 
 

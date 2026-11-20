@@ -44,7 +44,9 @@ For the live Japanese preview, configure the archive with `GOEMON_JP_LIVE_THREAD
 
 IDLE publishes its checkpoint while waiting for an external message. It clears that record before dequeuing or delivering a message. A restored IDLE thread resumes the wait loop after setup. The scheduler fixture restores IDLE from copied RAM and verifies that a native producer can wake it and deliver a message to a blocked guest.
 
-A game-wide save state still needs a coordinator for all guest threads and native workers, serialization of pending external messages, and coverage for other native waits.
+The external-message queue can copy its pending records in FIFO order and restore them into an empty queue. It rejects a capture while delivery holds a message or a batch outside the queue. F6 also tracks acknowledgements at the VI, RSP, graphics, and timer dispatch boundaries. The F5 log reports those acknowledgements and whether the external queue could be copied.
+
+A game-wide save state still needs a coordinator to hold those boundaries while capturing RAM, together with the device state owned by the workers and the renderer.
 
 ## Verified local build, 15 November 2026
 

@@ -46,14 +46,17 @@ int main() {
     assert(controller().set_paused(true));
     std::thread worker([&] {
         started.store(true, std::memory_order_release);
-        const bool active = controller().wait_if_paused(exiting);
+        const bool active = controller().wait_if_paused(exiting, goemon_jp::pause::PauseWorker::Vi);
         finished.store(active, std::memory_order_release);
     });
     while (!started.load(std::memory_order_acquire)) std::this_thread::yield();
     std::this_thread::sleep_for(15ms);
     assert(!finished.load(std::memory_order_acquire));
     assert(controller().is_paused());
+    assert(controller().parked_workers() ==
+        static_cast<std::uint32_t>(goemon_jp::pause::PauseWorker::Vi));
     assert(controller().set_paused(false));
+    assert(controller().parked_workers() == 0);
     worker.join();
     assert(finished.load(std::memory_order_acquire));
     assert(controller().transitions() == 2);
