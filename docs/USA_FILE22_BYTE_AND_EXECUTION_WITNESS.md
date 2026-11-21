@@ -80,5 +80,53 @@ Evidence gates:
 - at least one original-ROM file22 translated function entry with the
   file22 slot active, both image checks passed and USA system validated.
 
-Retain research-only status until these are witnessed in actual gameplay.
-No matching-C promotion, full decomp CI or G2 exact-ROM rebuild is claimed.
+## Actual original-USA game trace: 2026-11-21 20:17:24 (user-provided)
+
+The source branch at commit c9242c3 added the C17 probe-injector repair and
+was run in the user's Ubuntu unified USA/Japan launcher. The user provided
+metadata-only files goemon-usa-file22-proof-20261121-201724.log and .json.
+The supplied live trace was re-audited separately from pre-launch synthetic
+fixture output. Evidence is limited to this run.
+
+- Complete live trace: 289 lines, including one opt-in header, 34 changed
+  guest-step callback snapshots, 120 loader registration requests, 120 matching
+  file-loader postprocessing events, 2 file22 byte attestations and 12
+  unique original-address translated-function-entry events.
+- Every loader request matched a postprocess event with identical ROM source,
+  guest destination and source length in observed sequence (120 / 120).
+  This pairing is not independent data validation for the other 119 files.
+- File22 registration: t=328996 microseconds; source ROM 0x0069E080;
+  guest destination 0x801CB460; 47,264 ROM-backed bytes; outer state 3.
+- Before relocation t=329363 us: reference_ok=1, guest_window_ok=1,
+  exact_bytes=1, mismatches=0.
+- Postprocess return t=329568 us and after-relocation byte comparison
+  t=329572 us: reference_ok=1, guest_window_ok=1,
+  exact_bytes=1, mismatches=0, pre_relocation_match=1,
+  post_relocation_match=1. The 0xFFFFFFFF first_mismatch sentinel is expected
+  when no byte mismatch exists; it is not a guest-memory offset.
+- Twelve distinct translated entry events between t=329633 and t=612360 us,
+  all with file22_slot_active=1, both byte-match flags=1,
+  usa_sys_valid=1 and outer=3. The entry addresses are:
+  0x801CB460, 0x801CB4BC, 0x801CB53C, 0x801CB610,
+  0x801CB668, 0x801CB95C, 0x801CB9CC, 0x801CBAF8,
+  0x801CBC8C, 0x801CBF5C, 0x801CBF98, 0x801CC0C4.
+- Subsequent outer-state observation 4 starts at t=2379018 us; file20
+  is later loaded over the same destination at t=2412333 us.
+  The file22 entry events all precede this replacement.
+- No file22 memory comparison mismatch was observed. The trace stays below
+  the 4,096-event cap. No file22 byte/image data were copied to the log.
+
+**Result:** FILE22_IMAGE_EXACT_AT_BOTH_CHECKPOINTS and
+FILE22_TRANSLATED_FUNCTION_ENTRY_OBSERVED (all 12 of 12 within the
+instrumented sample). This resolves these two narrow experimental gates.
+
+**Still unproved:** an independently sampled original-MIPS guest PC register,
+true guest-frame boundary, confirmed scene entry, arbitrary relocation
+correctness (the file22 expected delta is zero), general overlay execution,
+or byte-integrity of other files. No matching-C promotion, full decomp
+verification/CI, or exact original-USA G2 ROM rebuild was run as part of this
+runtime experiment. This remains RESEARCH_ONLY; do not merge as a decomp
+implementation proof. The live-run JSON's empty limitations array was an
+analyzer presentation defect; a later source revision corrects it without
+changing the captured success facts.
+
