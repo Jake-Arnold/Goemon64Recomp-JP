@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Instrument authenticated original-USA file-22 generated C++ functions.
+"""Instrument authenticated original-USA file-22 generated C or C++ functions.
 
 The ignored RecompiledFuncs tree is a generated, uncommitted local input.
 Fail closed if any of the 12 original-address functions are missing,
@@ -17,12 +17,24 @@ SYMBOLS = {
     "func_801CBC8C_69E8AC", "func_801CBF5C_69EB7C",
     "func_801CBF98_69EBB8", "func_801CC0C4_69ECE4",
 }
-DECL = (
+OLD_DECL = (
     '// GOEMON_USA_FILE22_PROBE_DECLARATION (generated, do not commit)\n'
     '#include <cstdint>\n'
     'extern "C" void goemon_usa_file22_translated_entry_probe('
     'std::uint8_t* rdram, std::uint32_t rom_offset, '
     'std::uint32_t guest_entry);\n'
+)
+DECL = (
+    '// GOEMON_USA_FILE22_PROBE_DECLARATION (generated, do not commit)\n'
+    '#include <stdint.h>\n'
+    '#ifdef __cplusplus\n'
+    'extern "C" {\n'
+    '#endif\n'
+    'void goemon_usa_file22_translated_entry_probe('
+    'uint8_t* rdram, uint32_t rom_offset, uint32_t guest_entry);\n'
+    '#ifdef __cplusplus\n'
+    '}\n'
+    '#endif\n'
 )
 PATTERN = re.compile(
     r'\bvoid\s+(func_([0-9A-Fa-f]{8})_([0-9A-Fa-f]{6,8}))\s*'
@@ -57,10 +69,13 @@ def instrument(source_dir: Path):
         raise RuntimeError("Missing original-USA generated symbols: " + ", ".join(missing))
     changed = []
     for path, (data, matches) in staged.items():
+        original = data
         replacements = 0
         for match in reversed(matches):
             name = match.group(1)
             if f"GOEMON_USA_FILE22_ENTRY_PROBE {name}" in data:
+                if data.count(f"GOEMON_USA_FILE22_ENTRY_PROBE {name}") != 1:
+                    raise RuntimeError(f"Duplicate existing file22 probe {name} in {path}")
                 continue
             fragment = (
                 f"\n    // GOEMON_USA_FILE22_ENTRY_PROBE {name}\n"
@@ -70,9 +85,16 @@ def instrument(source_dir: Path):
             )
             data = data[:match.end()] + fragment + data[match.end():]
             replacements += 1
-        if replacements:
-            if "GOEMON_USA_FILE22_PROBE_DECLARATION" not in data:
-                data = DECL + "\n" + data
+        if "GOEMON_USA_FILE22_PROBE_DECLARATION" in data:
+            if data.count("GOEMON_USA_FILE22_PROBE_DECLARATION") != 1:
+                raise RuntimeError(f"Duplicate file22 declaration in {path}")
+            if OLD_DECL in data:
+                data = data.replace(OLD_DECL, DECL, 1)
+            elif DECL not in data:
+                raise RuntimeError(f"Unknown existing file22 declaration in {path}")
+        if replacements and DECL not in data:
+            data = DECL + "\n" + data
+        if data != original:
             changed.append((path, data))
     # No writes until all required symbols and source-range checks pass.
     for path, data in changed:
