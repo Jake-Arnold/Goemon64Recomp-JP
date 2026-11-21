@@ -26,3 +26,4 @@ recomp_get_camera_inputs = 0x8F000054;
 recomp_set_right_analog_suppressed = 0x8F000058;
 recomp_run_ui_callbacks = 0x8F00005C;
 recomp_file_loader_postprocess = 0x8F000060;
+recomp_file22_copy_complete = 0x8F000064;
