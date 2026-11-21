@@ -159,6 +159,35 @@ extern "C" void recomp_file_loader_postprocess(uint8_t* rdram, recomp_context* c
 #endif
 }
 
+// Original-USA guest MIPS pre-relocation callback for file 22 only.
+extern "C" void recomp_file22_copy_complete(uint8_t* rdram, recomp_context* ctx) {
+#ifdef GOEMON_UNIFIED_REGIONS
+    goemon64::usa_native_trace::observe_file22_copy_complete(
+        rdram, _arg<0, u32>(rdram, ctx), _arg<1, u32>(rdram, ctx),
+        static_cast<std::uint32_t>(_arg<2, PTR(void)>(rdram, ctx)),
+        _arg<3, u32>(rdram, ctx));
+#else
+    (void)rdram;
+    (void)ctx;
+#endif
+}
+
+// A source-only script inserts the call at the beginning of each authenticated
+// file-22 function in ignored RecompiledFuncs/. The compiled original-address
+// translated function is preserved; only an observer call is added.
+extern "C" void goemon_usa_file22_translated_entry_probe(
+    uint8_t* rdram, std::uint32_t original_rom_function,
+    std::uint32_t guest_function_entry) {
+#ifdef GOEMON_UNIFIED_REGIONS
+    goemon64::usa_native_trace::observe_file22_translated_entry(
+        rdram, original_rom_function, guest_function_entry);
+#else
+    (void)rdram;
+    (void)original_rom_function;
+    (void)guest_function_entry;
+#endif
+}
+
 extern "C" void recomp_unload_overlays(uint8_t *rdram, recomp_context *ctx) {
     PTR(void) vram_addr = _arg<0, PTR(void)>(rdram, ctx);
     u32 size = _arg<1, u32>(rdram, ctx);
