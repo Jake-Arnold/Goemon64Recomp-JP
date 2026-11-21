@@ -24,6 +24,9 @@
 #include "librecomp/helpers.hpp"
 
 #include "../patches/ui_funcs.h"
+#ifdef GOEMON_UNIFIED_REGIONS
+#include "../game/usa_native_state_trace.hpp"
+#endif
 
 struct QueuedCallback {
     recompui::ResourceId resource;
@@ -93,6 +96,11 @@ bool convert_event(const recompui::Event& in, RecompuiEventData& out) {
 }
 
 extern "C" void recomp_run_ui_callbacks(uint8_t* rdram, recomp_context* ctx) {
+#ifdef GOEMON_UNIFIED_REGIONS
+    // Called by patched USA func_800012FC_1EFC: guest-path observation,
+    // not an authenticated frame boundary or executed guest PC.
+    goemon64::usa_native_trace::observe_guest_step_callback(rdram);
+#endif
     // Allocate the event on the stack.
     gpr stack_frame = ctx->r29;
     ctx->r29 -= sizeof(RecompuiEventData);

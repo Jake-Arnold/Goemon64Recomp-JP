@@ -51,6 +51,9 @@
 #include "goemon_render.h"
 #include "goemon_support.h"
 #include "goemon_game.h"
+#ifdef GOEMON_UNIFIED_REGIONS
+#include "../game/usa_native_state_trace.hpp"
+#endif
 #include "recomp_data.h"
 #include "ovl_patches.hpp"
 #include "librecomp/game.hpp"
@@ -706,6 +709,10 @@ bool goemon64::launcher::start_unified_game(bool japan) {
     if (profile.empty()) {
         return false;
     }
+
+    // Only the selected original-USA runtime may emit opt-in state/loader trace.
+    // This happens before the guest is published and never touches guest RAM.
+    goemon64::usa_native_trace::select_region(japan);
 
     // No guest has started yet. Install one matching code/patch table before
     // publishing the game ID that lets the waiting guest boot.

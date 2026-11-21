@@ -13,6 +13,9 @@
 #include "../patches/sound.h"
 #include "ultramodern/ultramodern.hpp"
 #include "ultramodern/config.hpp"
+#ifdef GOEMON_UNIFIED_REGIONS
+#include "usa_native_state_trace.hpp"
+#endif
 
 extern "C" void recomp_update_inputs(uint8_t* rdram, recomp_context* ctx) {
     recomp::poll_inputs();
@@ -130,6 +133,12 @@ extern "C" void recomp_load_overlays(uint8_t * rdram, recomp_context * ctx) {
     PTR(void) ram = _arg<1, PTR(void)>(rdram, ctx);
     u32 size = _arg<2, u32>(rdram, ctx);
 
+#ifdef GOEMON_UNIFIED_REGIONS
+    // Registration request only; original MIPS copy/decompression/relocation
+    // happens later in patched func_80001C00_2800.
+    goemon64::usa_native_trace::observe_overlay_registration_request(
+        rdram, rom, static_cast<std::uint32_t>(ram), size);
+#endif
     load_overlays(rom, ram, size);
 }
 
