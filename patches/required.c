@@ -49,6 +49,13 @@ RECOMP_PATCH u8 *func_80001C00_2800(u32 file_id, u8 *buf_start)
                 buf_cur = buf_start + file_size_aligned;
             }
 
+            // @recomp Read-only original-USA file-22 memory witness. This
+            // runs after the ROM copy/decompress returns, before relocation.
+            if (file_id == 22) {
+                recomp_file22_copy_complete(file_id, file_rom_addr,
+                                            (void *)buf_start, file_size);
+            }
+
             // @recomp Apply relocations after loading the overlay.
             overlay_apply_relocations(file_id, buf_start);
         }
@@ -58,6 +65,14 @@ RECOMP_PATCH u8 *func_80001C00_2800(u32 file_id, u8 *buf_start)
         while (buf_cur < buf_end) {
             *buf_cur = 0;
             buf_cur++;
+        }
+
+        // @recomp Loader postprocess observation: the copy/decompress call,
+        // relocation function and trailing zero-fill have all returned.
+        // This is not a data-integrity check or guest execution proof.
+        if (file_size != 0) {
+            recomp_file_loader_postprocess(file_id, file_rom_addr,
+                                              (void *)buf_start, file_size);
         }
 
         // @recomp Not needed in the static recompilation.

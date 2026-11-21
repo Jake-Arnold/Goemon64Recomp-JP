@@ -1,4 +1,5 @@
 #include <cmath>
+#include <cstdint>
 
 #include "recomp.h"
 #include "librecomp/overlays.hpp"
@@ -13,6 +14,9 @@
 #include "../patches/sound.h"
 #include "ultramodern/ultramodern.hpp"
 #include "ultramodern/config.hpp"
+#ifdef GOEMON_UNIFIED_REGIONS
+#include "usa_native_state_trace.hpp"
+#endif
 
 extern "C" void recomp_update_inputs(uint8_t* rdram, recomp_context* ctx) {
     recomp::poll_inputs();
@@ -130,7 +134,59 @@ extern "C" void recomp_load_overlays(uint8_t * rdram, recomp_context * ctx) {
     PTR(void) ram = _arg<1, PTR(void)>(rdram, ctx);
     u32 size = _arg<2, u32>(rdram, ctx);
 
+#ifdef GOEMON_UNIFIED_REGIONS
+    // Registration request only; original MIPS copy/decompression/relocation
+    // happens later in patched func_80001C00_2800.
+    goemon64::usa_native_trace::observe_overlay_registration_request(
+        rdram, rom, static_cast<std::uint32_t>(ram), size);
+#endif
     load_overlays(rom, ram, size);
+}
+
+// Called from the patched USA MIPS loader after copy/decompress,
+// overlay_apply_relocations and tail zero-fill return. It does not
+// perform an independent content verification.
+extern "C" void recomp_file_loader_postprocess(uint8_t* rdram, recomp_context* ctx) {
+#ifdef GOEMON_UNIFIED_REGIONS
+    goemon64::usa_native_trace::observe_file_loader_postprocess(
+        rdram,
+        _arg<0, u32>(rdram, ctx),
+        _arg<1, u32>(rdram, ctx),
+        static_cast<std::uint32_t>(_arg<2, PTR(void)>(rdram, ctx)),
+        _arg<3, u32>(rdram, ctx));
+#else
+    (void)rdram;
+    (void)ctx;
+#endif
+}
+
+// Original-USA guest MIPS pre-relocation callback for file 22 only.
+extern "C" void recomp_file22_copy_complete(uint8_t* rdram, recomp_context* ctx) {
+#ifdef GOEMON_UNIFIED_REGIONS
+    goemon64::usa_native_trace::observe_file22_copy_complete(
+        rdram, _arg<0, u32>(rdram, ctx), _arg<1, u32>(rdram, ctx),
+        static_cast<std::uint32_t>(_arg<2, PTR(void)>(rdram, ctx)),
+        _arg<3, u32>(rdram, ctx));
+#else
+    (void)rdram;
+    (void)ctx;
+#endif
+}
+
+// A source-only script inserts the call at the beginning of each authenticated
+// file-22 function in ignored RecompiledFuncs/. The compiled original-address
+// translated function is preserved; only an observer call is added.
+extern "C" void goemon_usa_file22_translated_entry_probe(
+    uint8_t* rdram, std::uint32_t original_rom_function,
+    std::uint32_t guest_function_entry) {
+#ifdef GOEMON_UNIFIED_REGIONS
+    goemon64::usa_native_trace::observe_file22_translated_entry(
+        rdram, original_rom_function, guest_function_entry);
+#else
+    (void)rdram;
+    (void)original_rom_function;
+    (void)guest_function_entry;
+#endif
 }
 
 extern "C" void recomp_unload_overlays(uint8_t *rdram, recomp_context *ctx) {
