@@ -142,6 +142,23 @@ extern "C" void recomp_load_overlays(uint8_t * rdram, recomp_context * ctx) {
     load_overlays(rom, ram, size);
 }
 
+// Called from the patched USA MIPS loader after copy/decompress,
+// overlay_apply_relocations and tail zero-fill return. It does not
+// perform an independent content verification.
+extern "C" void recomp_overlay_loader_postprocess(uint8_t* rdram, recomp_context* ctx) {
+#ifdef GOEMON_UNIFIED_REGIONS
+    goemon64::usa_native_trace::observe_overlay_loader_postprocess(
+        rdram,
+        _arg<0, u32>(rdram, ctx),
+        _arg<1, u32>(rdram, ctx),
+        static_cast<std::uint32_t>(_arg<2, PTR(void)>(rdram, ctx)),
+        _arg<3, u32>(rdram, ctx));
+#else
+    (void)rdram;
+    (void)ctx;
+#endif
+}
+
 extern "C" void recomp_unload_overlays(uint8_t *rdram, recomp_context *ctx) {
     PTR(void) vram_addr = _arg<0, PTR(void)>(rdram, ctx);
     u32 size = _arg<1, u32>(rdram, ctx);

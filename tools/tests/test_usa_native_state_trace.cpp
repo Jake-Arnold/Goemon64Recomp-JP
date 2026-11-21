@@ -57,6 +57,7 @@ int main() {
     select_region(true);
     observe_guest_step_callback(ram.get());
     observe_overlay_registration_request(ram.get(), 0x69CBD0, 0x801CB460, 0x100);
+    observe_overlay_loader_postprocess(ram.get(), 22, 0x69CBD0, 0x801CB460, 0x100);
 
     // Gate off by default for USA and for any non-exact opt-in string.
     unsetenv("GOEMON_USA_NATIVE_STATE_TRACE");
@@ -73,5 +74,6 @@ int main() {
     observe_guest_step_callback(ram.get());
     observe_guest_step_callback(ram.get()); // unchanged sample should be silent
     observe_overlay_registration_request(ram.get(), 0x69CBD0, 0x801CB460, 0x100);
+    observe_overlay_loader_postprocess(ram.get(), 22, 0x69CBD0, 0x801CB460, 0x100);
     assert(ram[0x15C5C8] == before);
 }

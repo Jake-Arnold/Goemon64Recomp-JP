@@ -78,6 +78,7 @@ Select **Mystical Ninja Starring Goemon — USA** and click **Start Game · USA*
 
 - `type=step_callback_snapshot_changed`: guest RDRAM is accessed synchronously when the patched original-USA game-step function `func_800012FC_1EFC` invokes `recomp_run_ui_callbacks`. This callback runs on the guest execution path and supplies `rdram`; it is **not** proof of a completed guest frame, authenticated guest PC, or frame-atomic capture. `step_call` is only a local counter of validated callback observations. It is **not a frame number**. Only changed tuples are logged.
 - `type=overlay_registration_request`: emitted by host `recomp_load_overlays` **before** `load_overlays` is called, which itself precedes the patched MIPS loader's original ROM-byte copy/decompression and relocations. `source_rom`, `guest_destination`, and `source_length` are request arguments. They do **not** prove which original file ID completed, that the data was copied, or that the overlay is executing.
+- `type=overlay_loader_postprocess_returned`: called from patched original-USA `func_80001C00_2800` after the ROM transfer or decompressor returns, `overlay_apply_relocations` returns, the loading guard is restored and tail zero-fill finishes. Includes original `file_id` directly from the guest loader and the same address/size tuple used by registration requests. `copy_or_decompress_returned=1`, `relocation_call_returned=1`, `tail_zero_fill_done=1` describe reaching that program point, **not** verification of data bytes, relocation correctness, execution PC, completed scene entry or a clean error status. `data_verified=0` is explicit.
 - `outer`, `secondary`, `tertiary`: original USA SYS_W selectors. `room`: intended room-field value at guest `0x800C7AB2`. `selection`: group-local selection at `0x800C7AB4`; this is **not** a scheduler flag/mode.
 - A room value of `0` at boot is the game's default/uninitialized field value, **not evidence of room 0 being entered**. A room-field change, including a transient ID, is not evidence of completed scene entry.
 - `usa_sys_valid=1` means the read-only N64 system-root sentinel at guest `0x8015C5C8` matched `0x8008CCC0` and the 18-way outer state was in range. It does not authenticate which ROM file the launcher imported. The USA region gate is set by the launcher, separately from this sentinel.
@@ -86,6 +87,19 @@ Select **Mystical Ninja Starring Goemon — USA** and click **Start Game · USA*
 No code bytes, full RDRAM, save files, host memory addresses, input events or routes are written into the trace. Log output is bounded to at most 4,096 events per process run; if that bound is reached, further events are silently discarded. The feature does not install guest execution breakpoints or change the original game program.
 
 The normal external `decomp.state_runtime_trace` observer remains useful for longer sessions and independent process-memory confirmation. These native callback observations are better located in the game path, but are **not interchangeable with original MIPS execution proofs**.
+
+## Required patch regeneration for loader postprocess events
+
+This extension changes `patches/required.c` and adds a new host callback assigned the unused dummy symbol `0x8F000060` in `patches/syms.ld`. Rebuild both the MIPS patch image and generated native patch sources; rebuilding only the C++ launcher will preserve the old request-only behavior:
+
+```sh
+make -C patches -j4
+./N64Recomp patches.toml
+cmake --build build-generated/usa-native-trace-configured --target Goemon64RecompiledJP -j4
+GOEMON_USA_NATIVE_STATE_TRACE=1 build-generated/usa-native-trace-configured/Goemon64RecompiledJP
+```
+
+Use the **previously verified** local build tree only. The `N64Recomp` executable and authentic generated USA input remain user-local dependencies. If `N64Recomp` rejects the new symbol, stop; no real loader completion has been observed yet. After USA gameplay, count `overlay_registration_request` and `overlay_loader_postprocess_returned` separately, and compare by `(source_rom, guest_destination, source_length)` plus order. A missing return event may be a non-returning call, truncated 4,096-event trace, disabled instrumentation or differing flow; it must not automatically be labelled a loader failure. Japan and default launch must emit neither event.
 
 ## Local ROM-free test
 

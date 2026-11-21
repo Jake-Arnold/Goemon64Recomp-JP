@@ -60,6 +60,14 @@ RECOMP_PATCH u8 *func_80001C00_2800(u32 file_id, u8 *buf_start)
             buf_cur++;
         }
 
+        // @recomp Loader postprocess observation: the copy/decompress call,
+        // relocation function and trailing zero-fill have all returned.
+        // This is not a data-integrity check or guest execution proof.
+        if (file_size != 0) {
+            recomp_overlay_loader_postprocess(file_id, file_rom_addr,
+                                              (void *)buf_start, file_size);
+        }
+
         // @recomp Not needed in the static recompilation.
         // osWritebackDCache_recomp(buf_start, buf_end - buf_start);
     } else {

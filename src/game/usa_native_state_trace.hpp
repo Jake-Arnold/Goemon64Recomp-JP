@@ -37,4 +37,14 @@ void observe_overlay_registration_request(const std::uint8_t* rdram,
                                           std::uint32_t guest_destination,
                                           std::uint32_t source_length);
 
+// Synchronously emitted at the tail of patched USA func_80001C00_2800,
+// after ROM copy/decompression, relocation call, state restore and zero-fill.
+// File ID comes directly from the guest loader. Reaching this point does NOT
+// verify copied/relocated bytes or prove execution of the loaded overlay.
+void observe_overlay_loader_postprocess(const std::uint8_t* rdram,
+                                        std::uint32_t file_id,
+                                        std::uint32_t rom_source,
+                                        std::uint32_t guest_destination,
+                                        std::uint32_t source_length);
+
 } // namespace goemon64::usa_native_trace

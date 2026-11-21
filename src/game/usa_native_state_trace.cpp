@@ -140,4 +140,29 @@ void observe_overlay_registration_request(const std::uint8_t* rdram,
         static_cast<unsigned>(valid ? current.room_id : 0),
         static_cast<unsigned>(valid ? current.room_group_selection : 0));
 }
+void observe_overlay_loader_postprocess(const std::uint8_t* rdram,
+                                        std::uint32_t file_id,
+                                        std::uint32_t rom_source,
+                                        std::uint32_t guest_destination,
+                                        std::uint32_t source_length) {
+    if (!enabled.load(std::memory_order_acquire)) return;
+    Snapshot current;
+    const bool valid = decode_usa_snapshot(rdram, current);
+    std::lock_guard lock(trace_lock);
+    if (!enabled.load(std::memory_order_relaxed) || emitted_events >= kMaxEvents) return;
+    ++emitted_events;
+    std::fprintf(stderr,
+        "[Goemon USA native state trace] type=overlay_loader_postprocess_returned "
+        "elapsed_us=%llu file_id=%u source_rom=0x%08X guest_destination=0x%08X "
+        "source_length=%u usa_sys_valid=%u outer=%u room=%u selection=%u "
+        "copy_or_decompress_returned=1 relocation_call_returned=1 "
+        "tail_zero_fill_done=1 data_verified=0 guest_pc=unavailable guest_frame=unavailable\n",
+        static_cast<unsigned long long>(elapsed_us()), file_id,
+        rom_source, guest_destination, source_length,
+        static_cast<unsigned>(valid),
+        static_cast<unsigned>(valid ? current.outer_state : 0),
+        static_cast<unsigned>(valid ? current.room_id : 0),
+        static_cast<unsigned>(valid ? current.room_group_selection : 0));
+}
+
 } // namespace goemon64::usa_native_trace
