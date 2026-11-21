@@ -47,4 +47,18 @@ void observe_file_loader_postprocess(const std::uint8_t* rdram,
                                         std::uint32_t guest_destination,
                                         std::uint32_t source_length);
 
+// Pre-relocation byte comparison against the authenticated decompressed USA ROM.
+void observe_file22_copy_complete(const std::uint8_t* rdram,
+                                  std::uint32_t file_id,
+                                  std::uint32_t rom_source,
+                                  std::uint32_t guest_destination,
+                                  std::uint32_t source_length);
+
+// Called from an exact original-address generated translated function body.
+// Proves that the corresponding compiled guest function was entered; it is
+// not a sampled MIPS PC register or an independently observed frame boundary.
+void observe_file22_translated_entry(const std::uint8_t* rdram,
+                                     std::uint32_t original_rom_function,
+                                     std::uint32_t guest_function_entry);
+
 } // namespace goemon64::usa_native_trace
