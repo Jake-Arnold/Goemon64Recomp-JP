@@ -56,7 +56,11 @@ def summarize(records):
         and int(r.get("guest_function_entry", "0"), 16)
             == 0x801CB460 + int(r.get("original_rom_function", "0"), 16) - 0x69E080
     ]
-    limitations = []
+    limitations = [
+        "No independent sampled MIPS guest PC register (translated entry only)",
+        "No independently confirmed scene entry or completed guest frame",
+        "File22 static zero-delta comparison does not verify general relocations",
+    ]
     if not good_pre:
         limitations.append("No exact pre-relocation ROM-backed image comparison")
     if not good_post:
