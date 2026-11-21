@@ -1,6 +1,8 @@
 #include "usa_native_state_trace.hpp"
+#include "usa_file22_reference.hpp"
 
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -26,6 +28,13 @@ std::optional<Snapshot> last_step_snapshot;
 std::chrono::steady_clock::time_point started;
 std::uint64_t observed_step_calls = 0;
 std::uint64_t emitted_events = 0;
+
+// Only instrumentation metadata; no guest memory is modified.
+bool file22_copy_verified = false;
+bool file22_post_verified = false;
+bool file22_slot_active = false;
+std::array<std::uint32_t, 12> file22_seen_rom{};
+std::size_t file22_seen_count = 0;
 
 // All addresses above are fixed, authenticated USA RDRAM globals (<8 MiB).
 // N64Recomp stores the guest in word-swapped order on x86-64.
@@ -93,6 +102,11 @@ void select_region(bool japan) {
     last_step_snapshot.reset();
     observed_step_calls = 0;
     emitted_events = 0;
+    file22_copy_verified = false;
+    file22_post_verified = false;
+    file22_slot_active = false;
+    file22_seen_count = 0;
+    file22_seen_rom.fill(0);
     started = std::chrono::steady_clock::now();
     if (opt_in && !japan) {
         std::fprintf(stderr,
@@ -140,29 +154,140 @@ void observe_overlay_registration_request(const std::uint8_t* rdram,
         static_cast<unsigned>(valid ? current.room_id : 0),
         static_cast<unsigned>(valid ? current.room_group_selection : 0));
 }
-void observe_file_loader_postprocess(const std::uint8_t* rdram,
-                                        std::uint32_t file_id,
-                                        std::uint32_t rom_source,
-                                        std::uint32_t guest_destination,
-                                        std::uint32_t source_length) {
-    if (!enabled.load(std::memory_order_acquire)) return;
+
+void observe_file22_copy_complete(const std::uint8_t* rdram,
+                                  std::uint32_t file_id,
+                                  std::uint32_t rom_source,
+                                  std::uint32_t guest_destination,
+                                  std::uint32_t source_length) {
+    if (!enabled.load(std::memory_order_acquire) || file_id != 22u) return;
+    // This callback is placed after copy/decompress, before relocation.
+    const auto evidence = usa_file22_reference::inspect(
+        rdram, guest_destination, rom_source, source_length);
     Snapshot current;
     const bool valid = decode_usa_snapshot(rdram, current);
     std::lock_guard lock(trace_lock);
     if (!enabled.load(std::memory_order_relaxed) || emitted_events >= kMaxEvents) return;
+    file22_copy_verified = evidence.reference_ok && evidence.exact_bytes;
+    file22_post_verified = false;
+    file22_slot_active = false;
+    file22_seen_count = 0;
+    ++emitted_events;
+    std::fprintf(stderr,
+        "[Goemon USA native state trace] type=file22_image_attestation "
+        "stage=before_relocation elapsed_us=%llu file_id=22 "
+        "source_rom=0x%08X guest_destination=0x%08X source_length=%u "
+        "reference_ok=%u guest_window_ok=%u exact_bytes=%u "
+        "mismatches=%u first_mismatch=%u "
+        "expected_relocation_delta=0 rom_sha1_preflight_required=1 "
+        "usa_sys_valid=%u outer=%u guest_pc=unavailable\n",
+        static_cast<unsigned long long>(elapsed_us()),
+        rom_source, guest_destination, source_length,
+        static_cast<unsigned>(evidence.reference_ok),
+        static_cast<unsigned>(evidence.guest_window_ok),
+        static_cast<unsigned>(evidence.exact_bytes),
+        evidence.mismatched_bytes, evidence.first_mismatch,
+        static_cast<unsigned>(valid),
+        static_cast<unsigned>(valid ? current.outer_state : 0));
+}
+
+void observe_file_loader_postprocess(const std::uint8_t* rdram,
+                                     std::uint32_t file_id,
+                                     std::uint32_t rom_source,
+                                     std::uint32_t guest_destination,
+                                     std::uint32_t source_length) {
+    if (!enabled.load(std::memory_order_acquire)) return;
+    const bool is_file22 = file_id == 22u;
+    const auto evidence = is_file22
+        ? usa_file22_reference::inspect(rdram, guest_destination, rom_source, source_length)
+        : usa_file22_reference::Evidence{};
+    Snapshot current;
+    const bool valid = decode_usa_snapshot(rdram, current);
+    std::lock_guard lock(trace_lock);
+    if (!enabled.load(std::memory_order_relaxed) || emitted_events >= kMaxEvents) return;
+    if (is_file22) {
+        file22_post_verified = evidence.reference_ok && evidence.exact_bytes
+                            && file22_copy_verified;
+        file22_slot_active = true;
+        file22_seen_count = 0;
+    } else if (guest_destination == usa_file22_reference::kFile22Vram) {
+        // Other static overlays replace file 22 at the same execution slot.
+        file22_slot_active = false;
+        file22_post_verified = false;
+    }
     ++emitted_events;
     std::fprintf(stderr,
         "[Goemon USA native state trace] type=file_loader_postprocess_returned "
         "elapsed_us=%llu file_id=%u source_rom=0x%08X guest_destination=0x%08X "
         "source_length=%u usa_sys_valid=%u outer=%u room=%u selection=%u "
         "copy_or_decompress_returned=1 relocation_call_returned=1 "
-        "tail_zero_fill_done=1 data_verified=0 guest_pc=unavailable guest_frame=unavailable\n",
+        "tail_zero_fill_done=1 data_verified=%u guest_pc=unavailable guest_frame=unavailable\n",
         static_cast<unsigned long long>(elapsed_us()), file_id,
         rom_source, guest_destination, source_length,
         static_cast<unsigned>(valid),
         static_cast<unsigned>(valid ? current.outer_state : 0),
         static_cast<unsigned>(valid ? current.room_id : 0),
-        static_cast<unsigned>(valid ? current.room_group_selection : 0));
+        static_cast<unsigned>(valid ? current.room_group_selection : 0),
+        static_cast<unsigned>(is_file22 && file22_post_verified));
+    if (is_file22 && emitted_events < kMaxEvents) {
+        ++emitted_events;
+        std::fprintf(stderr,
+            "[Goemon USA native state trace] type=file22_image_attestation "
+            "stage=after_relocation elapsed_us=%llu file_id=22 "
+            "source_rom=0x%08X guest_destination=0x%08X source_length=%u "
+            "reference_ok=%u guest_window_ok=%u exact_bytes=%u "
+            "mismatches=%u first_mismatch=%u pre_relocation_match=%u "
+            "post_relocation_match=%u expected_relocation_delta=0 "
+            "rom_sha1_preflight_required=1 usa_sys_valid=%u outer=%u "
+            "guest_pc=unavailable\n",
+            static_cast<unsigned long long>(elapsed_us()),
+            rom_source, guest_destination, source_length,
+            static_cast<unsigned>(evidence.reference_ok),
+            static_cast<unsigned>(evidence.guest_window_ok),
+            static_cast<unsigned>(evidence.exact_bytes),
+            evidence.mismatched_bytes, evidence.first_mismatch,
+            static_cast<unsigned>(file22_copy_verified),
+            static_cast<unsigned>(file22_post_verified),
+            static_cast<unsigned>(valid),
+            static_cast<unsigned>(valid ? current.outer_state : 0));
+    }
+}
+
+void observe_file22_translated_entry(const std::uint8_t* rdram,
+                                     std::uint32_t original_rom_function,
+                                     std::uint32_t guest_function_entry) {
+    if (!enabled.load(std::memory_order_acquire)) return;
+    // Reject accidentally instrumented functions outside the independently
+    // authenticated original-USA file-22 code segment.
+    if (original_rom_function < usa_file22_reference::kFile22Rom ||
+        original_rom_function >= usa_file22_reference::kFile22Rom
+                               + usa_file22_reference::kFile22CodeSize ||
+        guest_function_entry != usa_file22_reference::kFile22Vram
+                                + original_rom_function - usa_file22_reference::kFile22Rom) return;
+    Snapshot current;
+    const bool valid = decode_usa_snapshot(rdram, current);
+    std::lock_guard lock(trace_lock);
+    if (!enabled.load(std::memory_order_relaxed) || emitted_events >= kMaxEvents) return;
+    for (std::size_t i = 0; i < file22_seen_count; ++i) {
+        if (file22_seen_rom[i] == original_rom_function) return;
+    }
+    if (file22_seen_count < file22_seen_rom.size()) {
+        file22_seen_rom[file22_seen_count++] = original_rom_function;
+    }
+    ++emitted_events;
+    std::fprintf(stderr,
+        "[Goemon USA native state trace] type=file22_translated_function_entry "
+        "elapsed_us=%llu original_rom_function=0x%08X "
+        "guest_function_entry=0x%08X translated_entry_reached=1 "
+        "file22_slot_active=%u pre_relocation_match=%u post_relocation_match=%u "
+        "usa_sys_valid=%u outer=%u guest_pc=unavailable guest_frame=unavailable\n",
+        static_cast<unsigned long long>(elapsed_us()),
+        original_rom_function, guest_function_entry,
+        static_cast<unsigned>(file22_slot_active),
+        static_cast<unsigned>(file22_copy_verified),
+        static_cast<unsigned>(file22_post_verified),
+        static_cast<unsigned>(valid),
+        static_cast<unsigned>(valid ? current.outer_state : 0));
 }
 
 } // namespace goemon64::usa_native_trace
