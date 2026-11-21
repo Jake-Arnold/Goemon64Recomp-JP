@@ -17,6 +17,9 @@ def main():
     ]))
     assert summarize(events)["file22_bytes_confirmed"]
     assert summarize(events)["file22_translated_function_reached"]
+    assert summarize(events)["guest_pc_register_sampled"] is False
+    assert summarize(events)["scene_entry_confirmed"] is False
+    assert len(summarize(events)["limitations"]) >= 3
     assert summarize(events[:2])["file22_bytes_confirmed"]
     assert not summarize(events[:2])["file22_translated_function_reached"]
     assert not summarize(events[1:])["file22_bytes_confirmed"]
