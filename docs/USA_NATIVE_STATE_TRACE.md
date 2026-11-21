@@ -93,7 +93,7 @@ The normal external `decomp.state_runtime_trace` observer remains useful for lon
 This extension changes `patches/required.c` and adds a new host callback assigned the unused dummy symbol `0x8F000060` in `patches/syms.ld`. Rebuild both the MIPS patch image and generated native patch sources; rebuilding only the C++ launcher will preserve the old request-only behavior:
 
 ```sh
-make -C patches -j4
+make -C patches CC=clang LD=ld.lld -j4
 ./N64Recomp patches.toml
 cmake --build build-generated/usa-native-trace-configured --target Goemon64RecompiledJP -j4
 GOEMON_USA_NATIVE_STATE_TRACE=1 build-generated/usa-native-trace-configured/Goemon64RecompiledJP
