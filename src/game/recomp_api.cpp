@@ -145,9 +145,9 @@ extern "C" void recomp_load_overlays(uint8_t * rdram, recomp_context * ctx) {
 // Called from the patched USA MIPS loader after copy/decompress,
 // overlay_apply_relocations and tail zero-fill return. It does not
 // perform an independent content verification.
-extern "C" void recomp_overlay_loader_postprocess(uint8_t* rdram, recomp_context* ctx) {
+extern "C" void recomp_file_loader_postprocess(uint8_t* rdram, recomp_context* ctx) {
 #ifdef GOEMON_UNIFIED_REGIONS
-    goemon64::usa_native_trace::observe_overlay_loader_postprocess(
+    goemon64::usa_native_trace::observe_file_loader_postprocess(
         rdram,
         _arg<0, u32>(rdram, ctx),
         _arg<1, u32>(rdram, ctx),

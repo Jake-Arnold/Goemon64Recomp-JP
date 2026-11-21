@@ -64,7 +64,7 @@ RECOMP_PATCH u8 *func_80001C00_2800(u32 file_id, u8 *buf_start)
         // relocation function and trailing zero-fill have all returned.
         // This is not a data-integrity check or guest execution proof.
         if (file_size != 0) {
-            recomp_overlay_loader_postprocess(file_id, file_rom_addr,
+            recomp_file_loader_postprocess(file_id, file_rom_addr,
                                               (void *)buf_start, file_size);
         }
 
