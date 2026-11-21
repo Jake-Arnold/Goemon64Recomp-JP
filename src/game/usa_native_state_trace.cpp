@@ -112,7 +112,7 @@ void select_region(bool japan) {
         std::fprintf(stderr,
             "[Goemon USA native state trace] enabled=1 region=USA "
             "evidence=guest_callback_not_frame_atomic "
-            "overlay_events=registration_requests_only max_events=%llu\n",
+            "loader_events=registration_postprocess_file22_image_and_entry max_events=%llu\n",
             static_cast<unsigned long long>(kMaxEvents));
         enabled.store(true, std::memory_order_release);
     }
