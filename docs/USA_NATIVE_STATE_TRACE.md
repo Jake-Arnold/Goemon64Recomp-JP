@@ -9,9 +9,24 @@ This source is compiled into the unified USA/Japan Linux launcher, but tracing i
 From the repository root, build the existing unified Linux target with the same generated/private game assets used by the previous successful launcher build:
 
 ```sh
-cmake --build build-generated/launcher-unified --target Goemon64RecompiledJP -j"$(nproc)"
-GOEMON_USA_NATIVE_STATE_TRACE=1 ./build-generated/launcher-unified/Goemon64RecompiledJP
+# The published build-generated/launcher-unified/ folder may contain ONLY
+# the packaged executable, not the CMakeCache.txt required by cmake --build.
+find build-generated -name CMakeCache.txt -print
+
+# Use a configured build directory containing a CMakeCache.txt with:
+# GOEMON_BUILD_JAPAN:BOOL=ON
+# GOEMON_UNIFIED_REGIONS:BOOL=ON
+# GOEMON_JP_INTEGRATED_F8_RESET_EXPERIMENTAL:BOOL=ON
+cmake --build /path/to/configured-unified-build --target Goemon64RecompiledJP -j"$(nproc)"
+GOEMON_USA_NATIVE_STATE_TRACE=1 /path/to/configured-unified-build/Goemon64RecompiledJP
 ```
+
+Do not confuse the older binary at `build-generated/launcher-unified/Goemon64RecompiledJP`
+with a freshly compiled one: if the build step fails, running that path simply starts the
+previous release. If no configured unified build exists, create a new CMake build
+directory using the already verified local Japanese generated source archive, static
+library, and all stage1-18 options from the last successful unified build. Do not
+invent these local generated paths. Keep the original packaged binary intact.
 
 Select **Mystical Ninja Starring Goemon — USA** and click **Start Game · USA**. The existing session logger records stderr under `~/.local/state/goemon64recomp-jp/logs/`. Search only for the `[Goemon USA native state trace]` prefix. To stop tracing, relaunch without the environment variable. The exact string `1` is required.
 
