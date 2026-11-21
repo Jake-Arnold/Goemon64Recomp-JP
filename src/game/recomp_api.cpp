@@ -1,4 +1,5 @@
 #include <cmath>
+#include <cstdint>
 
 #include "recomp.h"
 #include "librecomp/overlays.hpp"
