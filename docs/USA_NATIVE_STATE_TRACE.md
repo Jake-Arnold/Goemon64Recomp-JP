@@ -4,6 +4,23 @@
 
 ## Build and enable
 
+### Check out the pinned source dependencies first
+
+The launcher source tree uses Git submodules for RT64, RmlUi, lunasvg,
+N64ModernRuntime and other dependencies. A checkout created without recursive
+submodules has empty `lib/*` directories and CMake fails at `add_subdirectory`
+with missing `CMakeLists.txt` (and may later report missing shader commands).
+Repair that **before** configuring:
+
+```sh
+git submodule sync --recursive
+git submodule update --init --recursive --jobs 4
+git submodule status
+```
+
+Submodule checkout alone does not provide the private generated Japanese
+recompiled source, `libGoemonRecompiledJapan.a`, ROM files or archives.
+
 This source is compiled into the unified USA/Japan Linux launcher, but tracing is **disabled by default** and also disabled when Japan is selected. No runtime game-memory write or state modification is performed.
 
 From the repository root, build the existing unified Linux target with the same generated/private game assets used by the previous successful launcher build:
